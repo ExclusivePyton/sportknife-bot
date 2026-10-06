@@ -9,7 +9,7 @@ class Settings:
     bot_token: str
     database_url: str
     admin_ids: tuple[int, ...]
-    timezone: str = "UTC"
+    timezone: str = "Europe/Moscow"
 
 def load_settings() -> Settings:
     token = os.getenv("BOT_TOKEN", "").strip()
@@ -25,6 +25,6 @@ def load_settings() -> Settings:
         admins = tuple(int(x.strip()) for x in admins_raw.split(",") if x.strip())
     except ValueError as e:
         raise RuntimeError("ADMIN_IDS должен содержать Telegram ID через запятую") from e
-    return Settings(token, db, admins, os.getenv("TIMEZONE", "UTC"))
+    return Settings(token, db, admins, os.getenv("TIMEZONE", "Europe/Moscow"))
 
 settings = load_settings()

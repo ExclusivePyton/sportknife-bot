@@ -87,7 +87,12 @@ async def wd_history(message: Message):
         await message.answer("📜 История выводов пуста.")
         return
     icons = {"pending":"🟡 В обработке", "paid":"🟢 Выплачено", "rejected":"🔴 Отклонено"}
+    from app.timeutil import format_msk
     text = "📜 <b>История выводов</b>\n\n"
     for w in rows:
-        text += f"{icons[w.status]} #{w.id} — {w.amount} Gold\n🔫 {w.skin_name} | Pattern: {w.pattern}\n📅 {w.created_at:%d.%m.%Y %H:%M}\n\n"
+        text += (
+            f"{icons[w.status]} #{w.id} — {w.amount} Gold\n"
+            f"🔫 {w.skin_name} | Pattern: {w.pattern}\n"
+            f"📅 {format_msk(w.created_at)} (МСК)\n\n"
+        )
     await message.answer(text)

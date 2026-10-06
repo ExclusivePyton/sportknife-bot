@@ -31,10 +31,13 @@ async def render_tour(tid, uid):
                 )
             )
         ).scalar_one_or_none()
+        from app.timeutil import format_msk
         cost = "Бесплатно" if t.registration_cost == 0 else f"{t.registration_cost} Gold"
         reg_status = "открыта" if t.registration_open else "закрыта"
+        start_str = format_msk(t.start_at)
         text = (
-            f"🏆 <b>{t.title}</b>\n\n{t.description}\n\n📅 {t.start_at:%d.%m.%Y %H:%M}\n"
+            f"🏆 <b>{t.title}</b>\n\n{t.description}\n\n"
+            f"📅 {start_str} <i>(МСК)</i>\n"
             f"🎮 Формат: {t.format}\n👥 Участники: {count}/{t.max_participants}\n"
             f"🪙 Стоимость регистрации: {cost}\n🏅 Призы: {t.prize_fund}\n"
             f"📜 Условия: {t.conditions}\n"

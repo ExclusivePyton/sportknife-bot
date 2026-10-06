@@ -1,11 +1,12 @@
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timezone
+from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, func
 from app.config import settings
 from app.db import SessionLocal
+from app.timeutil import parse_msk
 from app.models import User, Tournament, Registration, Withdrawal, WithdrawalStatus, TournamentStatus, PromoCode
 from app.services import (
     get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result,
@@ -133,7 +134,7 @@ async def ct_desc(message: Message, state: FSMContext):
     await state.update_data(description=desc)
     await state.set_state(TournamentCreateStates.start_at)
     await message.answer(
-        "Введите дату и время старта в формате:\n"
+        "Введите дату и время старта <b>по Москве (МСК)</b>:\n"
         "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
         "Пример: <code>15.10.2026 18:30</code>"
     )
@@ -142,9 +143,12 @@ async def ct_desc(message: Message, state: FSMContext):
 @router.message(TournamentCreateStates.start_at)
 async def ct_date(message: Message, state: FSMContext):
     try:
-        dt = datetime.strptime((message.text or "").strip(), "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
+        dt = parse_msk((message.text or "").strip())
     except Exception:
-        await message.answer("Неверный формат. Пример: <code>15.10.2026 18:30</code>")
+        await message.answer(
+            "Неверный формат. Пример: <code>15.10.2026 18:30</code>\n"
+            "(время <b>московское</b>, МСК)"
+        )
         return
     await state.update_data(start_at=dt.isoformat())
     await state.set_state(TournamentCreateStates.format)
