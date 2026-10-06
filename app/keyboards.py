@@ -63,6 +63,7 @@ def admin_menu():
         [InlineKeyboardButton(text="📋 Управление турнирами", callback_data="admin:tours")],
         [InlineKeyboardButton(text="👥 Участники", callback_data="admin:participants")],
         [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data="admin:gold")],
+        [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin:users")],
         [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="admin:promo_create")],
         [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo_list")],
         [InlineKeyboardButton(text="📢 Обязательные каналы", callback_data="admin:channels")],
@@ -131,3 +132,74 @@ def channel_remove_kb(channel_id: int):
             [InlineKeyboardButton(text="🔴 Убрать из обязательных", callback_data=f"ch_off:{channel_id}")]
         ]
     )
+
+
+# Форматы: AvB → слоты = A + B (1 слот = 1 человек)
+TOURNAMENT_FORMATS = [
+    "1v1", "1v2", "1v3", "1v4", "1v5",
+    "2v2", "2v3", "2v4", "2v5",
+    "3v3", "3v4", "3v5",
+    "4v4", "4v5",
+    "5v5",
+]
+
+
+def slots_for_format(fmt: str) -> int:
+    """1v2 → 3, 3v3 → 6 и т.д."""
+    parts = fmt.lower().replace("х", "x").replace("x", "v").split("v")
+    if len(parts) != 2:
+        raise ValueError("Неверный формат")
+    a, b = int(parts[0]), int(parts[1])
+    if a < 1 or b < 1:
+        raise ValueError("Неверный формат")
+    return a + b
+
+
+def format_choice_kb():
+    rows = []
+    row = []
+    for fmt in TOURNAMENT_FORMATS:
+        slots = slots_for_format(fmt)
+        row.append(
+            InlineKeyboardButton(
+                text=f"{fmt} ({slots})",
+                callback_data=f"fmt:{fmt}",
+            )
+        )
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def users_list_kb(users, page: int, total_pages: int):
+    """users: list of User, page 0-based."""
+    rows = []
+    for u in users:
+        label = u.game_id or "без ID"
+        nick = u.nickname or u.username or "—"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🎮 {label} | {nick} | 🪙{u.balance}",
+                callback_data=f"gold_pick:{u.id}",
+            )
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"users_page:{page-1}"))
+    nav.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"users_page:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="🔎 Поиск по Game ID", callback_data="admin:gold_search")])
+    rows.append([InlineKeyboardButton(text="🆔 Ввести Telegram ID", callback_data="admin:gold_tid")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def gold_pick_confirm_kb(user_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data=f"gold_pick:{user_id}")],
+    ])

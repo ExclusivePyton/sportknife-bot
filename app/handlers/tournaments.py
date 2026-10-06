@@ -38,7 +38,7 @@ async def render_tour(tid, uid):
         text = (
             f"🏆 <b>{t.title}</b>\n\n{t.description}\n\n"
             f"📅 {start_str} <i>(МСК)</i>\n"
-            f"🎮 Формат: {t.format}\n👥 Участники: {count}/{t.max_participants}\n"
+            f"🎮 Формат: {t.format}\n👥 Слоты: {count}/{t.max_participants}\n"
             f"🪙 Стоимость регистрации: {cost}\n🏅 Призы: {t.prize_fund}\n"
             f"📜 Условия: {t.conditions}\n"
             f"ℹ️ {t.additional_info or '—'}\n\nСтатус: {t.status.value}\nРегистрация: {reg_status}"

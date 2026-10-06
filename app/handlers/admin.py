@@ -13,7 +13,7 @@ from app.services import (
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
 )
-from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb
+from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb
 from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates
 
 router = Router()
@@ -25,41 +25,197 @@ async def admin_panel(message: Message):
     if not admin_only(message.from_user.id): return
     await message.answer("⚙️ <b>Админ-панель</b>", reply_markup=admin_menu())
 
+PAGE_SIZE = 15
+
+
+async def _send_users_page(message_or_call, page: int = 0):
+    async with SessionLocal() as s:
+        total = (await s.execute(select(func.count(User.id)))).scalar_one()
+        total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        users = (
+            await s.execute(
+                select(User).order_by(User.id.desc()).offset(page * PAGE_SIZE).limit(PAGE_SIZE)
+            )
+        ).scalars().all()
+    text = (
+        f"👥 <b>Игроки бота</b> (стр. {page+1}/{total_pages}, всего {total})\n\n"
+        "Нажмите на игрока, чтобы выдать Gold."
+    )
+    kb = users_list_kb(users, page, total_pages)
+    if hasattr(message_or_call, "message") and message_or_call.message:
+        # CallbackQuery
+        try:
+            await message_or_call.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            await message_or_call.message.answer(text, reply_markup=kb)
+        await message_or_call.answer()
+    else:
+        await message_or_call.answer(text, reply_markup=kb)
+
+
 @router.callback_query(lambda c: c.data == "admin:gold")
 async def admin_gold(call: CallbackQuery, state: FSMContext):
-    if not admin_only(call.from_user.id): return
+    if not admin_only(call.from_user.id):
+        return
+    await state.clear()
+    await _send_users_page(call, 0)
+
+
+@router.callback_query(lambda c: c.data == "admin:users")
+async def admin_users(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    await state.clear()
+    await _send_users_page(call, 0)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("users_page:"))
+async def users_page(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    page = int(call.data.split(":")[1])
+    await _send_users_page(call, page)
+
+
+@router.callback_query(lambda c: c.data == "noop")
+async def noop_cb(call: CallbackQuery):
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin:gold_tid")
+async def admin_gold_tid(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
     await state.set_state(AdminGoldStates.telegram_id)
     await call.message.answer("🪙 Введите Telegram ID игрока:")
     await call.answer()
 
+
+@router.callback_query(lambda c: c.data == "admin:gold_search")
+async def admin_gold_search(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    await state.set_state(AdminGoldStates.telegram_id)  # reuse: we'll treat as search
+    await state.update_data(gold_mode="search")
+    await call.message.answer("🔎 Введите Game ID (8 цифр) или часть ника:")
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("gold_pick:"))
+async def gold_pick(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    uid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not u:
+        await call.answer("Игрок не найден", show_alert=True)
+        return
+    await state.update_data(tid=u.telegram_id, user_db_id=u.id)
+    await state.set_state(AdminGoldStates.amount)
+    await call.message.answer(
+        f"Игрок: 🎮 <code>{u.game_id or '—'}</code> | {u.nickname or u.username or '—'}\n"
+        f"TG: <code>{u.telegram_id}</code> | баланс: {u.balance} Gold\n\n"
+        "Введите количество Gold:"
+    )
+    await call.answer()
+
+
 @router.message(AdminGoldStates.telegram_id)
 async def ag_id(message: Message, state: FSMContext):
-    try: tid = int(message.text)
-    except: await message.answer("Нужен числовой Telegram ID."); return
-    await state.update_data(tid=tid); await state.set_state(AdminGoldStates.amount)
-    await message.answer("Введите количество Gold:")
+    d = await state.get_data()
+    text = (message.text or "").strip()
+    if d.get("gold_mode") == "search":
+        async with SessionLocal() as s:
+            q = select(User)
+            if text.isdigit() and len(text) == 8:
+                q = q.where(User.game_id == text)
+            else:
+                like = f"%{text}%"
+                q = q.where(
+                    (User.nickname.ilike(like))
+                    | (User.username.ilike(like))
+                    | (User.game_id.ilike(like))
+                )
+            users = (await s.execute(q.order_by(User.id.desc()).limit(20))).scalars().all()
+        if not users:
+            await message.answer("Никого не найдено. Попробуйте ещё раз или откройте список.")
+            return
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        rows = []
+        for u in users:
+            rows.append([InlineKeyboardButton(
+                text=f"🎮 {u.game_id or '—'} | {u.nickname or u.username or '—'} | 🪙{u.balance}",
+                callback_data=f"gold_pick:{u.id}",
+            )])
+        await state.clear()
+        await message.answer("Найдено:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        return
+    try:
+        tid = int(text)
+    except Exception:
+        await message.answer("Нужен числовой Telegram ID.")
+        return
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
+    if not u:
+        await message.answer("Игрок с таким Telegram ID не найден в боте.")
+        return
+    await state.update_data(tid=tid, user_db_id=u.id)
+    await state.set_state(AdminGoldStates.amount)
+    await message.answer(
+        f"Игрок: 🎮 <code>{u.game_id or '—'}</code> | {u.nickname or '—'}\n"
+        f"Баланс: {u.balance} Gold\n\nВведите количество Gold:"
+    )
+
 
 @router.message(AdminGoldStates.amount)
 async def ag_amount(message: Message, state: FSMContext):
-    try: amount = Decimal(message.text.replace(",", "."))
-    except: await message.answer("Введите число."); return
-    if amount <= 0: await message.answer("Сумма должна быть > 0."); return
-    await state.update_data(amount=str(amount)); await state.set_state(AdminGoldStates.reason)
-    await message.answer("Укажите причину начисления:")
+    try:
+        amount = Decimal((message.text or "").replace(",", ".").strip())
+    except Exception:
+        await message.answer("Введите число.")
+        return
+    if amount <= 0:
+        await message.answer("Сумма должна быть > 0.")
+        return
+    await state.update_data(amount=str(amount))
+    await state.set_state(AdminGoldStates.reason)
+    await message.answer("Укажите причину начисления (увидит игрок):")
+
 
 @router.message(AdminGoldStates.reason)
 async def ag_reason(message: Message, state: FSMContext):
     d = await state.get_data()
+    reason = (message.text or "").strip() or "без указания причины"
+    amount = Decimal(d["amount"])
     async with SessionLocal() as s:
         u = (await s.execute(select(User).where(User.telegram_id == d["tid"]))).scalar_one_or_none()
         if not u:
             await message.answer("Игрок не найден.")
-            await state.clear(); return
+            await state.clear()
+            return
         from app.models import TransactionType
-        await add_gold(s, u.id, Decimal(d["amount"]), TransactionType.admin_credit, message.text.strip(), "admin")
+        await add_gold(s, u.id, amount, TransactionType.admin_credit, reason, "admin")
         await s.commit()
+        tg_id = u.telegram_id
+        game_id = u.game_id
     await state.clear()
-    await message.answer(f"✅ Начислено {d['amount']} Gold игроку {d['tid']}.")
+    await message.answer(
+        f"✅ Начислено <b>{amount}</b> Gold\n"
+        f"Игрок: 🎮 <code>{game_id or '—'}</code> (TG <code>{tg_id}</code>)"
+    )
+    # Уведомление игроку
+    try:
+        await message.bot.send_message(
+            tg_id,
+            f"🪙 Вам начислено <b>{amount}</b> Gold\n\n"
+            f"Причина: {reason}\n"
+            f"Выдал: администратор",
+        )
+    except Exception:
+        await message.answer("⚠️ Gold начислен, но сообщение игроку отправить не удалось (он не писал боту / блок).")
 
 @router.callback_query(lambda c: c.data == "admin:withdrawals")
 async def admin_withdrawals(call: CallbackQuery):
@@ -152,33 +308,58 @@ async def ct_date(message: Message, state: FSMContext):
         return
     await state.update_data(start_at=dt.isoformat())
     await state.set_state(TournamentCreateStates.format)
-    await message.answer("Введите <b>формат</b> турнира (например: 1v1, 2v2, FFA):")
+    from app.keyboards import format_choice_kb
+    await message.answer(
+        "Выберите <b>формат</b> турнира:\n"
+        "В скобках — число слотов (1 слот = 1 человек).\n"
+        "Пример: <code>3v3</code> → 6 слотов, <code>1v2</code> → 3 слота.",
+        reply_markup=format_choice_kb(),
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fmt:"))
+async def ct_format_cb(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    current = await state.get_state()
+    if current != TournamentCreateStates.format.state:
+        await call.answer("Сначала начните создание турнира", show_alert=True)
+        return
+    fmt = call.data.split(":", 1)[1]
+    from app.keyboards import slots_for_format
+    try:
+        slots = slots_for_format(fmt)
+    except Exception:
+        await call.answer("Неверный формат", show_alert=True)
+        return
+    await state.update_data(format=fmt, max_participants=slots)
+    await state.set_state(TournamentCreateStates.cost)
+    await call.message.edit_text(
+        f"✅ Формат: <b>{fmt}</b>\n"
+        f"👥 Слотов (участников): <b>{slots}</b>\n\n"
+        "Введите стоимость регистрации в Gold (<code>0</code> = бесплатно):"
+    )
+    await call.answer()
 
 
 @router.message(TournamentCreateStates.format)
-async def ct_format(message: Message, state: FSMContext):
-    fmt = (message.text or "").strip()
-    if not fmt:
-        await message.answer("Формат не может быть пустым. Введите формат:")
-        return
-    await state.update_data(format=fmt)
-    await state.set_state(TournamentCreateStates.max_participants)
-    await message.answer("Введите <b>максимум участников</b> (целое число):")
+async def ct_format_text(message: Message, state: FSMContext):
+    from app.keyboards import format_choice_kb
+    await message.answer(
+        "Выберите формат <b>кнопкой</b> ниже:",
+        reply_markup=format_choice_kb(),
+    )
 
 
 @router.message(TournamentCreateStates.max_participants)
-async def ct_max(message: Message, state: FSMContext):
-    try:
-        n = int((message.text or "").strip())
-    except Exception:
-        await message.answer("Введите целое число.")
-        return
-    if n < 1:
-        await message.answer("Минимум 1 участник.")
-        return
-    await state.update_data(max_participants=n)
-    await state.set_state(TournamentCreateStates.cost)
-    await message.answer("Стоимость регистрации в Gold (<code>0</code> = бесплатно):")
+async def ct_max_skip(message: Message, state: FSMContext):
+    # Слоты теперь из формата — если старое состояние, просим формат кнопками
+    from app.keyboards import format_choice_kb
+    await state.set_state(TournamentCreateStates.format)
+    await message.answer(
+        "Слоты задаются форматом. Выберите формат кнопкой:",
+        reply_markup=format_choice_kb(),
+    )
 
 
 @router.message(TournamentCreateStates.cost)
