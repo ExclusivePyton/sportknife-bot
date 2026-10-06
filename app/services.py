@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models import (
     User, Tournament, Registration, Transaction, TransactionType,
     Withdrawal, WithdrawalStatus, TournamentStatus, TournamentResult,
-    PromoCode, PromoRedemption,
+    PromoCode, PromoRedemption, RequiredChannel,
 )
 
 async def get_or_create_user(session, tg_user):
@@ -44,8 +44,8 @@ async def create_registration(session, user_id, tournament_id):
     existing = (await session.execute(select(Registration.id).where(Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
     if existing:
         raise ValueError("Вы уже зарегистрированы")
-    if not user.game_id or not user.nickname:
-        raise ValueError("Сначала заполните Game ID и NickName в профиле")
+    if not user.game_id:
+        raise ValueError("Сначала укажите Game ID через /start")
     cost = Decimal(tour.registration_cost)
     if cost > 0:
         if available_balance(user) < cost:
@@ -53,7 +53,8 @@ async def create_registration(session, user_id, tournament_id):
         user.balance -= cost
         session.add(Transaction(user_id=user.id, amount=-cost, type=TransactionType.registration,
                                 description=f"Регистрация на турнир #{tour.id}", reference_id=str(tour.id)))
-    reg = Registration(user_id=user.id, tournament_id=tour.id, game_id=user.game_id, nickname=user.nickname)
+    nick = user.nickname or user.username or user.game_id
+    reg = Registration(user_id=user.id, tournament_id=tour.id, game_id=user.game_id, nickname=nick)
     session.add(reg)
     return reg
 
@@ -224,3 +225,45 @@ async def deactivate_promo(session, promo_id: int) -> PromoCode:
     ).scalar_one()
     promo.is_active = False
     return promo
+
+
+async def list_active_channels(session):
+    result = await session.execute(
+        select(RequiredChannel).where(RequiredChannel.is_active == True).order_by(RequiredChannel.id)
+    )
+    return list(result.scalars().all())
+
+
+async def list_all_channels(session):
+    result = await session.execute(select(RequiredChannel).order_by(RequiredChannel.id))
+    return list(result.scalars().all())
+
+
+async def add_required_channel(session, chat_id: int, username: str | None, title: str) -> RequiredChannel:
+    existing = (
+        await session.execute(select(RequiredChannel).where(RequiredChannel.chat_id == chat_id))
+    ).scalar_one_or_none()
+    if existing:
+        existing.is_active = True
+        existing.username = username
+        existing.title = title or existing.title
+        return existing
+    ch = RequiredChannel(
+        chat_id=chat_id,
+        username=username,
+        title=title or (username or str(chat_id)),
+        is_active=True,
+    )
+    session.add(ch)
+    await session.flush()
+    return ch
+
+
+async def deactivate_channel(session, channel_id: int) -> RequiredChannel:
+    ch = (
+        await session.execute(
+            select(RequiredChannel).where(RequiredChannel.id == channel_id).with_for_update()
+        )
+    ).scalar_one()
+    ch.is_active = False
+    return ch

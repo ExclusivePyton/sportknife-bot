@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 from app.config import settings
 from app.db import engine
 from app.models import Base
+from app.middlewares import SubscriptionMiddleware
 from app.handlers.common import router as common_router
 from app.handlers.profile import router as profile_router
 from app.handlers.tournaments import router as tournaments_router
@@ -25,6 +26,10 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+    dp.message.middleware(SubscriptionMiddleware())
+    dp.callback_query.middleware(SubscriptionMiddleware())
+    # admin раньше — FSM создания турнира не перехватывается другими хендлерами
+    dp.include_router(admin_router)
     dp.include_router(common_router)
     dp.include_router(profile_router)
     dp.include_router(tournaments_router)
@@ -32,7 +37,6 @@ async def main():
     dp.include_router(stats_router)
     dp.include_router(withdrawals_router)
     dp.include_router(promo_router)
-    dp.include_router(admin_router)
     await dp.start_polling(bot)
 
 

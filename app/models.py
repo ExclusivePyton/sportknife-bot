@@ -196,3 +196,14 @@ class PromoRedemption(Base):
 
     promo: Mapped["PromoCode"] = relationship(back_populates="redemptions")
     user: Mapped["User"] = relationship(back_populates="promo_redemptions")
+
+
+class RequiredChannel(Base):
+    """Каналы, на которые нужно подписаться, чтобы пользоваться ботом."""
+    __tablename__ = "required_channels"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(255))  # без @, для ссылки
+    title: Mapped[str] = mapped_column(String(255), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

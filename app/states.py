@@ -47,3 +47,13 @@ class AdminPromoStates(StatesGroup):
     gold = State()
     max_uses = State()
     note = State()
+
+
+class StartGameIdStates(StatesGroup):
+    """Первый ввод Game ID при /start — потом изменить нельзя."""
+    waiting = State()
+
+
+class AdminChannelStates(StatesGroup):
+    """Админ добавляет обязательный канал."""
+    waiting = State()

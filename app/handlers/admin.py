@@ -10,9 +10,10 @@ from app.models import User, Tournament, Registration, Withdrawal, WithdrawalSta
 from app.services import (
     get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result,
     create_promo, list_promos, deactivate_promo,
+    list_all_channels, add_required_channel, deactivate_channel,
 )
-from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates
+from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates
 
 router = Router()
 
@@ -102,46 +103,140 @@ async def wd_reject(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "admin:create_tour")
 async def create_tour_start(call: CallbackQuery, state: FSMContext):
-    if not admin_only(call.from_user.id): return
-    await state.set_state(TournamentCreateStates.title); await call.message.answer("Название турнира:"); await call.answer()
+    if not admin_only(call.from_user.id):
+        return
+    await state.set_state(TournamentCreateStates.title)
+    await call.message.answer(
+        "🏆 Создание турнира\n\n"
+        "Введите <b>название</b> турнира:"
+    )
+    await call.answer()
+
 
 @router.message(TournamentCreateStates.title)
-async def ct_title(m,s): await s.update_data(title=m.text); await s.set_state(TournamentCreateStates.description); await m.answer("Описание:")
+async def ct_title(message: Message, state: FSMContext):
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Название не может быть пустым. Введите название:")
+        return
+    await state.update_data(title=title)
+    await state.set_state(TournamentCreateStates.description)
+    await message.answer("Введите <b>описание</b> турнира:")
+
+
 @router.message(TournamentCreateStates.description)
-async def ct_desc(m,s): await s.update_data(description=m.text); await s.set_state(TournamentCreateStates.start_at); await m.answer("Дата/время в формате ДД.ММ.ГГГГ ЧЧ:ММ:")
+async def ct_desc(message: Message, state: FSMContext):
+    desc = (message.text or "").strip()
+    if not desc:
+        await message.answer("Описание не может быть пустым. Введите описание:")
+        return
+    await state.update_data(description=desc)
+    await state.set_state(TournamentCreateStates.start_at)
+    await message.answer(
+        "Введите дату и время старта в формате:\n"
+        "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+        "Пример: <code>15.10.2026 18:30</code>"
+    )
+
+
 @router.message(TournamentCreateStates.start_at)
-async def ct_date(m,s):
-    try: dt=datetime.strptime(m.text.strip(), "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
-    except: await m.answer("Неверный формат."); return
-    await s.update_data(start_at=dt.isoformat()); await s.set_state(TournamentCreateStates.format); await m.answer("Формат:")
+async def ct_date(message: Message, state: FSMContext):
+    try:
+        dt = datetime.strptime((message.text or "").strip(), "%d.%m.%Y %H:%M").replace(tzinfo=timezone.utc)
+    except Exception:
+        await message.answer("Неверный формат. Пример: <code>15.10.2026 18:30</code>")
+        return
+    await state.update_data(start_at=dt.isoformat())
+    await state.set_state(TournamentCreateStates.format)
+    await message.answer("Введите <b>формат</b> турнира (например: 1v1, 2v2, FFA):")
+
+
 @router.message(TournamentCreateStates.format)
-async def ct_format(m,s): await s.update_data(format=m.text); await s.set_state(TournamentCreateStates.max_participants); await m.answer("Максимум участников:")
+async def ct_format(message: Message, state: FSMContext):
+    fmt = (message.text or "").strip()
+    if not fmt:
+        await message.answer("Формат не может быть пустым. Введите формат:")
+        return
+    await state.update_data(format=fmt)
+    await state.set_state(TournamentCreateStates.max_participants)
+    await message.answer("Введите <b>максимум участников</b> (целое число):")
+
+
 @router.message(TournamentCreateStates.max_participants)
-async def ct_max(m,s):
-    try: n=int(m.text)
-    except: await m.answer("Введите целое число."); return
-    if n<1: await m.answer("Минимум 1."); return
-    await s.update_data(max_participants=n); await s.set_state(TournamentCreateStates.cost); await m.answer("Стоимость регистрации в Gold (0 = бесплатно):")
+async def ct_max(message: Message, state: FSMContext):
+    try:
+        n = int((message.text or "").strip())
+    except Exception:
+        await message.answer("Введите целое число.")
+        return
+    if n < 1:
+        await message.answer("Минимум 1 участник.")
+        return
+    await state.update_data(max_participants=n)
+    await state.set_state(TournamentCreateStates.cost)
+    await message.answer("Стоимость регистрации в Gold (<code>0</code> = бесплатно):")
+
+
 @router.message(TournamentCreateStates.cost)
-async def ct_cost(m,s):
-    try: n=Decimal(m.text.replace(",", "."))
-    except: await m.answer("Введите число."); return
-    if n<0: await m.answer("Не может быть отрицательной."); return
-    await s.update_data(cost=str(n)); await s.set_state(TournamentCreateStates.prize_fund); await m.answer("Призовой фонд:")
+async def ct_cost(message: Message, state: FSMContext):
+    try:
+        n = Decimal((message.text or "").replace(",", ".").strip())
+    except Exception:
+        await message.answer("Введите число.")
+        return
+    if n < 0:
+        await message.answer("Не может быть отрицательной.")
+        return
+    await state.update_data(cost=str(n))
+    await state.set_state(TournamentCreateStates.prize_fund)
+    await message.answer("Опишите <b>призовой фонд</b>:")
+
+
 @router.message(TournamentCreateStates.prize_fund)
-async def ct_prize(m,s): await s.update_data(prize=m.text); await s.set_state(TournamentCreateStates.conditions); await m.answer("Условия:")
+async def ct_prize(message: Message, state: FSMContext):
+    prize = (message.text or "").strip()
+    if not prize:
+        await message.answer("Призовой фонд не может быть пустым.")
+        return
+    await state.update_data(prize=prize)
+    await state.set_state(TournamentCreateStates.conditions)
+    await message.answer("Введите <b>условия</b> турнира:")
+
+
 @router.message(TournamentCreateStates.conditions)
-async def ct_conditions(m,s): await s.update_data(conditions=m.text); await s.set_state(TournamentCreateStates.additional_info); await m.answer("Дополнительная информация (или —):")
+async def ct_conditions(message: Message, state: FSMContext):
+    cond = (message.text or "").strip()
+    if not cond:
+        await message.answer("Условия не могут быть пустыми.")
+        return
+    await state.update_data(conditions=cond)
+    await state.set_state(TournamentCreateStates.additional_info)
+    await message.answer("Дополнительная информация (или отправьте <code>—</code>):")
+
+
 @router.message(TournamentCreateStates.additional_info)
-async def ct_finish(m,s):
-    d=await s.get_data()
+async def ct_finish(message: Message, state: FSMContext):
+    d = await state.get_data()
+    extra = (message.text or "").strip()
     async with SessionLocal() as db:
-        t=Tournament(title=d["title"],description=d["description"],start_at=datetime.fromisoformat(d["start_at"]),
-                     format=d["format"],max_participants=d["max_participants"],registration_cost=Decimal(d["cost"]),
-                     prize_fund=d["prize"],conditions=d["conditions"],additional_info=None if m.text=="—" else m.text,
-                     status=TournamentStatus.open)
-        db.add(t); await db.commit()
-    await s.clear(); await m.answer(f"✅ Турнир создан: #{t.id}")
+        t = Tournament(
+            title=d["title"],
+            description=d["description"],
+            start_at=datetime.fromisoformat(d["start_at"]),
+            format=d["format"],
+            max_participants=d["max_participants"],
+            registration_cost=Decimal(d["cost"]),
+            prize_fund=d["prize"],
+            conditions=d["conditions"],
+            additional_info=None if extra in ("—", "-", "–") else extra,
+            status=TournamentStatus.open,
+            registration_open=True,
+        )
+        db.add(t)
+        await db.commit()
+        await db.refresh(t)
+    await state.clear()
+    await message.answer(f"✅ Турнир создан: <b>#{t.id}</b> — {t.title}")
 
 @router.callback_query(lambda c: c.data == "admin:tours")
 async def admin_tours(call: CallbackQuery):
@@ -272,19 +367,19 @@ async def admin_find(call: CallbackQuery, state: FSMContext):
     await state.set_state(AdminFindStates.telegram_id); await call.message.answer("Введите Telegram ID:"); await call.answer()
 
 @router.message(AdminFindStates.telegram_id)
-async def admin_find_do(m, s):
+async def admin_find_do(message: Message, state: FSMContext):
     try:
-        tid = int(m.text)
+        tid = int((message.text or "").strip())
     except Exception:
-        await m.answer("Нужен числовой ID.")
+        await message.answer("Нужен числовой ID.")
         return
     async with SessionLocal() as db:
         u = (await db.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
-    await s.clear()
+    await state.clear()
     if not u:
-        await m.answer("Игрок не найден.")
+        await message.answer("Игрок не найден.")
         return
-    await m.answer(
+    await message.answer(
         f"👤 {u.nickname or '—'}\n🎮 {u.game_id or '—'}\n🆔 {u.telegram_id}\n"
         f"🪙 {u.balance} Gold\n🔒 {u.reserved_balance} Gold"
     )
@@ -420,3 +515,136 @@ async def admin_promo_off(call: CallbackQuery):
             return
     await call.message.edit_reply_markup(reply_markup=None)
     await call.answer(f"Промокод {promo.code} отключён.")
+
+
+# ---------- Обязательные каналы ----------
+
+@router.callback_query(lambda c: c.data == "admin:channels")
+async def admin_channels(call: CallbackQuery):
+    if not admin_only(call.from_user.id):
+        return
+    async with SessionLocal() as s:
+        channels = await list_all_channels(s)
+    await call.message.answer(
+        "📢 <b>Обязательные каналы</b>\n\n"
+        "Пользователи должны быть подписаны на все <b>активные</b> каналы.\n"
+        "Бот должен быть <b>администратором</b> каждого канала (чтобы проверять подписку).\n\n"
+        "Чтобы добавить канал — нажмите кнопку ниже и перешлите любое сообщение из канала "
+        "или отправьте @username канала."
+    )
+    if not channels:
+        await call.message.answer("Список пуст.")
+    else:
+        for ch in channels:
+            status = "🟢 активен" if ch.is_active else "🔴 выключен"
+            uname = f"@{ch.username}" if ch.username else "—"
+            text = (
+                f"#{ch.id} {ch.title or '—'}\n"
+                f"Username: {uname}\n"
+                f"chat_id: <code>{ch.chat_id}</code>\n"
+                f"Статус: {status}"
+            )
+            kb = channel_remove_kb(ch.id) if ch.is_active else None
+            await call.message.answer(text, reply_markup=kb)
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    await call.message.answer(
+        "Действия:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить канал", callback_data="admin:channel_add")],
+        ]),
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin:channel_add")
+async def admin_channel_add(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    await state.set_state(AdminChannelStates.waiting)
+    await call.message.answer(
+        "Пришлите:\n"
+        "• пересланное сообщение из канала, или\n"
+        "• @username канала (публичный), или\n"
+        "• числовой chat_id канала (например -100123...)\n\n"
+        "Бот должен быть админом этого канала."
+    )
+    await call.answer()
+
+
+@router.message(AdminChannelStates.waiting)
+async def admin_channel_save(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    chat_id = None
+    username = None
+    title = ""
+
+    if message.forward_from_chat:
+        chat = message.forward_from_chat
+        chat_id = chat.id
+        username = chat.username
+        title = chat.title or ""
+    elif message.text:
+        text = message.text.strip()
+        if text.startswith("@"):
+            username = text.lstrip("@")
+            try:
+                chat = await message.bot.get_chat(f"@{username}")
+                chat_id = chat.id
+                title = chat.title or username
+                username = chat.username or username
+            except Exception as e:
+                await message.answer(f"❌ Не удалось найти канал @{username}: {e}")
+                return
+        elif text.lstrip("-").isdigit():
+            chat_id = int(text)
+            try:
+                chat = await message.bot.get_chat(chat_id)
+                username = chat.username
+                title = chat.title or str(chat_id)
+            except Exception as e:
+                await message.answer(
+                    f"❌ Не удалось получить канал {chat_id}: {e}\n"
+                    "Убедитесь, что бот добавлен в канал как администратор."
+                )
+                return
+        else:
+            await message.answer("Пришлите @username, chat_id или пересланное сообщение из канала.")
+            return
+    else:
+        await message.answer("Пришлите @username, chat_id или пересланное сообщение из канала.")
+        return
+
+    async with SessionLocal() as s:
+        try:
+            ch = await add_required_channel(s, chat_id, username, title)
+            await s.commit()
+        except Exception as e:
+            await s.rollback()
+            await message.answer(f"❌ Ошибка: {e}")
+            await state.clear()
+            return
+    await state.clear()
+    await message.answer(
+        f"✅ Канал добавлен как обязательный:\n"
+        f"<b>{ch.title}</b>\n"
+        f"chat_id: <code>{ch.chat_id}</code>\n"
+        f"username: @{ch.username or '—'}"
+    )
+
+
+@router.callback_query(lambda c: c.data.startswith("ch_off:"))
+async def admin_channel_off(call: CallbackQuery):
+    if not admin_only(call.from_user.id):
+        return
+    cid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        try:
+            ch = await deactivate_channel(s, cid)
+            await s.commit()
+        except Exception as e:
+            await s.rollback()
+            await call.answer(str(e), show_alert=True)
+            return
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer(f"Канал {ch.title or ch.chat_id} убран из обязательных.")

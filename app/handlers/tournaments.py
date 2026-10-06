@@ -85,10 +85,9 @@ async def register_cb(call: CallbackQuery):
     tid = int(call.data.split(":")[1])
     async with SessionLocal() as s:
         u = await get_or_create_user(s, call.from_user)
-        if not u.game_id or not u.nickname:
+        if not u.game_id:
             await s.commit()
-            await call.answer("Сначала заполните профиль", show_alert=True)
-            await call.message.answer("Укажите данные так:\nGame ID: 123456")
+            await call.answer("Сначала укажите Game ID через /start", show_alert=True)
             return
         try:
             await create_registration(s, u.id, tid)
