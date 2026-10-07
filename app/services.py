@@ -33,17 +33,54 @@ async def add_gold(session, user_id, amount: Decimal, tx_type, description, refe
     session.add(Transaction(user_id=user.id, amount=amount, type=tx_type, description=description, reference_id=reference_id))
     return user
 
-async def create_registration(session, user_id, tournament_id):
+SIDES = ("T", "CT")
+SIDE_NAMES = {"T": "🟠 Т (террористы)", "CT": "🔵 КТ (контр-террористы)"}
+SIDE_SHORT = {"T": "🟠 Т", "CT": "🔵 КТ"}
+
+
+def side_caps(tour) -> tuple[int, int]:
+    """Лимит игроков за Т и за КТ. Формат AvB: A мест за Т, B мест за КТ (1v1 → 1 и 1, 5v5 → 5 и 5)."""
+    try:
+        parts = str(tour.format).lower().replace("х", "v").replace("x", "v").split("v")
+        if len(parts) == 2:
+            a, b = int(parts[0]), int(parts[1])
+            if a > 0 and b > 0:
+                return a, b
+    except Exception:
+        pass
+    half = (tour.max_participants + 1) // 2
+    return half, tour.max_participants - half
+
+
+async def count_by_side(session, tournament_id) -> dict:
+    rows = (
+        await session.execute(
+            select(Registration.side, func.count(Registration.id))
+            .where(Registration.tournament_id == tournament_id)
+            .group_by(Registration.side)
+        )
+    ).all()
+    return {side: n for side, n in rows}
+
+
+async def create_registration(session, user_id, tournament_id, side):
+    if side not in SIDES:
+        raise ValueError("Выберите сторону: Т или КТ")
     user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
     tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
     if tour.status != TournamentStatus.open or not tour.registration_open:
         raise ValueError("Регистрация закрыта")
-    count = (await session.execute(select(func.count(Registration.id)).where(Registration.tournament_id == tournament_id))).scalar_one()
-    if count >= tour.max_participants:
-        raise ValueError("Турнир уже заполнен")
     existing = (await session.execute(select(Registration.id).where(Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
     if existing:
         raise ValueError("Вы уже зарегистрированы")
+    count = (await session.execute(select(func.count(Registration.id)).where(Registration.tournament_id == tournament_id))).scalar_one()
+    if count >= tour.max_participants:
+        raise ValueError("Турнир уже заполнен")
+    t_cap, ct_cap = side_caps(tour)
+    cap = t_cap if side == "T" else ct_cap
+    by_side = await count_by_side(session, tournament_id)
+    if by_side.get(side, 0) >= cap:
+        raise ValueError(f"За {SIDE_SHORT[side]} все места заняты ({cap}/{cap}). Выберите другую сторону.")
     if not user.game_id:
         raise ValueError("Сначала укажите Game ID через /start")
     cost = Decimal(tour.registration_cost)
@@ -54,7 +91,7 @@ async def create_registration(session, user_id, tournament_id):
         session.add(Transaction(user_id=user.id, amount=-cost, type=TransactionType.registration,
                                 description=f"Регистрация на турнир #{tour.id}", reference_id=str(tour.id)))
     nick = user.nickname or user.username or user.game_id
-    reg = Registration(user_id=user.id, tournament_id=tour.id, game_id=user.game_id, nickname=nick)
+    reg = Registration(user_id=user.id, tournament_id=tour.id, game_id=user.game_id, nickname=nick, side=side)
     session.add(reg)
     await session.flush()
     # после регистрации: если слоты заполнены — закрыть регистрацию
@@ -68,6 +105,107 @@ async def create_registration(session, user_id, tournament_id):
         tour.registration_open = False
         filled = True
     return reg, filled
+
+
+async def change_side(session, user_id, tournament_id, side):
+    """Сменить сторону, пока турнир открыт (если на другой стороне есть место)."""
+    if side not in SIDES:
+        raise ValueError("Выберите сторону: Т или КТ")
+    tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
+    if tour.status != TournamentStatus.open:
+        raise ValueError("Сменить сторону уже нельзя")
+    reg = (await session.execute(select(Registration).where(
+        Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
+    if not reg:
+        raise ValueError("Вы не зарегистрированы в этом турнире")
+    if reg.side == side:
+        raise ValueError("Вы уже на этой стороне")
+    t_cap, ct_cap = side_caps(tour)
+    cap = t_cap if side == "T" else ct_cap
+    by_side = await count_by_side(session, tournament_id)
+    if by_side.get(side, 0) >= cap:
+        raise ValueError(f"За {SIDE_SHORT[side]} все места заняты ({cap}/{cap})")
+    reg.side = side
+    return reg
+
+
+async def kick_player(session, tournament_id, user_id, refund: bool):
+    """Админ выгоняет игрока из турнира. Возвращает (возвращённая сумма, переоткрыта ли регистрация)."""
+    user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
+    if tour.status not in (TournamentStatus.open, TournamentStatus.running):
+        raise ValueError("Турнир уже завершён или отменён")
+    reg = (await session.execute(select(Registration).where(
+        Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
+    if not reg:
+        raise ValueError("Игрок уже не в турнире")
+    cost = Decimal(tour.registration_cost)
+    await session.delete(reg)
+    await session.flush()
+    refunded = Decimal(0)
+    if refund and cost > 0:
+        user.balance += cost
+        refunded = cost
+        session.add(Transaction(user_id=user.id, amount=cost, type=TransactionType.registration_refund,
+                                description=f"Возврат: исключение из турнира #{tour.id}", reference_id=str(tour.id)))
+    left = (await session.execute(select(func.count(Registration.id)).where(
+        Registration.tournament_id == tournament_id))).scalar_one()
+    reopened = False
+    if tour.status == TournamentStatus.open and left < tour.max_participants and not tour.registration_open:
+        tour.registration_open = True
+        reopened = True
+    return refunded, reopened, user
+
+
+async def finish_tournament(session, tournament_id, winner_user_ids, winner_side, prize_each, screenshot):
+    """Завершить турнир: отметить победителей, начислить приз каждому, обновить статистику.
+    winner_side: "T" / "CT" / "manual" / None. Выполняется атомарно, повторно завершить нельзя."""
+    prize_each = Decimal(prize_each)
+    if prize_each < 0:
+        raise ValueError("Приз не может быть отрицательным")
+    tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
+    if tour.status in (TournamentStatus.finished, TournamentStatus.cancelled):
+        raise ValueError("Турнир уже завершён или отменён")
+    regs = (await session.execute(select(Registration).where(Registration.tournament_id == tournament_id))).scalars().all()
+    reg_users = {r.user_id for r in regs}
+    winners = set(winner_user_ids)
+    if not winners.issubset(reg_users):
+        raise ValueError("Среди победителей есть игрок, которого нет в турнире")
+    # блокируем всех игроков в стабильном порядке
+    users = (await session.execute(
+        select(User).where(User.id.in_(sorted(reg_users))).order_by(User.id).with_for_update()
+    )).scalars().all() if reg_users else []
+    for u in users:
+        u.tournaments_played += 1
+        if u.id in winners:
+            u.wins += 1
+    for r in regs:
+        r.is_winner = r.user_id in winners
+    if prize_each > 0:
+        for uid in sorted(winners):
+            await add_gold(session, uid, prize_each, TransactionType.prize,
+                           f"Победа в турнире #{tournament_id}", str(tournament_id))
+    tour.status = TournamentStatus.finished
+    tour.registration_open = False
+    tour.winner_side = winner_side
+    tour.result_screenshot = screenshot
+    tour.finished_at = datetime.now(timezone.utc)
+    return tour, regs
+
+
+async def get_history(session, user_id, limit: int = 15):
+    """Пополнения (админ, промокоды, призы) и выводы пользователя."""
+    deposit_types = (TransactionType.admin_credit, TransactionType.promo, TransactionType.prize)
+    deposits = (await session.execute(
+        select(Transaction).where(Transaction.user_id == user_id, Transaction.type.in_(deposit_types))
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc()).limit(limit)
+    )).scalars().all()
+    withdrawals = (await session.execute(
+        select(Withdrawal).where(Withdrawal.user_id == user_id)
+        .order_by(Withdrawal.created_at.desc(), Withdrawal.id.desc()).limit(limit)
+    )).scalars().all()
+    return deposits, withdrawals
+
 
 async def create_withdrawal(session, user_id, amount, skin, pattern, screenshot):
     user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()

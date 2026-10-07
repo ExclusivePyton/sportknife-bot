@@ -89,6 +89,10 @@ class Tournament(Base):
         default=TournamentStatus.open,
     )
     registration_open: Mapped[bool] = mapped_column(Boolean, default=True)
+    # итоги: победившая сторона ("T" / "CT" / "manual" / None), скриншот статистики, дата завершения
+    winner_side: Mapped[str | None] = mapped_column(String(10))
+    result_screenshot: Mapped[str | None] = mapped_column(Text)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     registrations: Mapped[list["Registration"]] = relationship(
@@ -109,6 +113,8 @@ class Registration(Base):
     tournament_id: Mapped[int] = mapped_column(ForeignKey("tournaments.id", ondelete="CASCADE"))
     game_id: Mapped[str] = mapped_column(String(255))
     nickname: Mapped[str] = mapped_column(String(255))
+    side: Mapped[str | None] = mapped_column(String(2))  # "T" / "CT"
+    is_winner: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     user: Mapped["User"] = relationship(back_populates="registrations")
     tournament: Mapped["Tournament"] = relationship(back_populates="registrations")

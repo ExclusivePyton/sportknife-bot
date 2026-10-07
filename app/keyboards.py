@@ -6,9 +6,9 @@ SUPPORT_USERNAME = "zzxdmq"
 def main_menu(is_admin=False):
     rows = [
         [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="👤 Профиль")],
-        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🪙 Gold")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📜 История")],
         [KeyboardButton(text="💸 Вывод"), KeyboardButton(text="🎁 Промокод")],
-        [KeyboardButton(text="📜 История выводов"), KeyboardButton(text="💬 Поддержка")],
+        [KeyboardButton(text="💬 Поддержка")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админ-панель")])
@@ -36,24 +36,57 @@ def tournament_list(items, counts: dict | None = None):
     rows = []
     for t in items:
         n = counts.get(t.id, "?")
-        open_mark = "🟢" if t.registration_open else "🔒"
+        if t.status.value == "running":
+            mark = "▶️"
+        else:
+            mark = "🟢" if t.registration_open else "🔒"
         rows.append([
             InlineKeyboardButton(
-                text=f"{open_mark} {t.title} [{n}/{t.max_participants}] {t.format}",
+                text=f"{mark} {t.title} [{n}/{t.max_participants}] {t.format}",
                 callback_data=f"tour:{t.id}",
             )
         ])
+    rows.append([InlineKeyboardButton(text="🏁 Завершённые турниры", callback_data="tours_done")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def tournament_detail(tid, registered=False, can_leave=False):
-    rows = []
-    if not registered:
-        rows.append([InlineKeyboardButton(text="✅ Зарегистрироваться", callback_data=f"reg:{tid}")])
-    elif can_leave:
-        rows.append([InlineKeyboardButton(text="🚪 Выйти из турнира", callback_data=f"unreg:{tid}")])
+def finished_list(items):
+    rows = [
+        [InlineKeyboardButton(text=f"🏁 #{t.id} {t.title} {t.format}", callback_data=f"tour:{t.id}")]
+        for t in items
+    ]
     rows.append([InlineKeyboardButton(text="⬅️ К турнирам", callback_data="tours")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tournament_detail(tid, registered=False, can_leave=False, can_register=False,
+                      can_switch=False, has_shot=False, back="tours"):
+    rows = []
+    if can_register and not registered:
+        rows.append([InlineKeyboardButton(text="✅ Зарегистрироваться", callback_data=f"rp:{tid}")])
+    if registered and can_switch:
+        rows.append([InlineKeyboardButton(text="🔄 Сменить сторону", callback_data=f"sp:{tid}")])
+    if registered and can_leave:
+        rows.append([InlineKeyboardButton(text="🚪 Выйти из турнира", callback_data=f"unreg:{tid}")])
+    if has_shot:
+        rows.append([InlineKeyboardButton(text="📸 Статистика матча", callback_data=f"shot:{tid}")])
+    rows.append([InlineKeyboardButton(
+        text="⬅️ К турнирам", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def side_pick_kb(tid, mode, by_side: dict, t_cap: int, ct_cap: int):
+    """mode: 'reg' — выбор при регистрации, 'sw' — смена стороны."""
+    prefix = "rs" if mode == "reg" else "ss"
+    rows = []
+    for side, cap, label in (("T", t_cap, "🟠 За Т"), ("CT", ct_cap, "🔵 За КТ")):
+        n = by_side.get(side, 0)
+        if n >= cap:
+            rows.append([InlineKeyboardButton(text=f"🔒 {label} — занято {n}/{cap}", callback_data="side_full")])
+        else:
+            rows.append([InlineKeyboardButton(text=f"{label} — {n}/{cap}", callback_data=f"{prefix}:{tid}:{side}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"tour:{tid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -222,3 +255,58 @@ def player_actions_kb(user_id: int, is_banned: bool = False):
         ban_row,
         [InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users")],
     ])
+
+
+def finish_winner_kb(tid):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟠 Победила сторона Т", callback_data=f"fin_side:{tid}:T")],
+        [InlineKeyboardButton(text="🔵 Победила сторона КТ", callback_data=f"fin_side:{tid}:CT")],
+        [InlineKeyboardButton(text="👤 Выбрать победителей вручную", callback_data=f"fin_manual:{tid}")],
+        [InlineKeyboardButton(text="➖ Без победителей", callback_data=f"fin_none:{tid}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fin_cancel")],
+    ])
+
+
+def finish_manual_kb(tid, regs, selected: set):
+    """regs: [(reg_id, label)], selected: set reg_id"""
+    rows = []
+    for reg_id, label in regs:
+        mark = "✅" if reg_id in selected else "⬜"
+        rows.append([InlineKeyboardButton(text=f"{mark} {label}", callback_data=f"fin_tg:{tid}:{reg_id}")])
+    rows.append([InlineKeyboardButton(text=f"➡️ Далее (выбрано: {len(selected)})", callback_data=f"fin_next:{tid}")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="fin_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def finish_confirm_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Завершить турнир", callback_data="fin_do")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fin_cancel")],
+    ])
+
+
+def skip_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Без скриншота", callback_data="fin_skip_shot")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="fin_cancel")],
+    ])
+
+
+def admin_participants_kb(tid, rows_):
+    """rows_: [(user_id, label)] — кнопки исключения игроков."""
+    rows = [
+        [InlineKeyboardButton(text=f"🚫 Выгнать: {label}", callback_data=f"kick:{tid}:{uid}")]
+        for uid, label in rows_
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def kick_confirm_kb(tid, uid, paid: bool):
+    rows = []
+    if paid:
+        rows.append([InlineKeyboardButton(text="♻️ Выгнать и вернуть Gold", callback_data=f"kick_do:{tid}:{uid}:1")])
+        rows.append([InlineKeyboardButton(text="🚫 Выгнать без возврата", callback_data=f"kick_do:{tid}:{uid}:0")])
+    else:
+        rows.append([InlineKeyboardButton(text="🚫 Выгнать из турнира", callback_data=f"kick_do:{tid}:{uid}:0")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=f"adm_tour_part:{tid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

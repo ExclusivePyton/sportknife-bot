@@ -76,23 +76,3 @@ async def wd_confirm(message: Message, state: FSMContext):
             return
     await state.clear()
     await message.answer(f"✅ Заявка #{wd.id} создана.\n🟡 Статус: В обработке\n🔒 Gold зарезервирован.")
-
-@router.message(F.text == "📜 История выводов")
-async def wd_history(message: Message):
-    async with SessionLocal() as s:
-        u = await get_or_create_user(s, message.from_user)
-        rows = (await s.execute(select(Withdrawal).where(Withdrawal.user_id == u.id).order_by(Withdrawal.created_at.desc()).limit(30))).scalars().all()
-        await s.commit()
-    if not rows:
-        await message.answer("📜 История выводов пуста.")
-        return
-    icons = {"pending":"🟡 В обработке", "paid":"🟢 Выплачено", "rejected":"🔴 Отклонено"}
-    from app.timeutil import format_msk
-    text = "📜 <b>История выводов</b>\n\n"
-    for w in rows:
-        text += (
-            f"{icons[w.status]} #{w.id} — {w.amount} Gold\n"
-            f"🔫 {w.skin_name} | Pattern: {w.pattern}\n"
-            f"📅 {format_msk(w.created_at)} (МСК)\n\n"
-        )
-    await message.answer(text)

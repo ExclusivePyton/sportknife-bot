@@ -8,6 +8,11 @@ async def ensure_schema() -> None:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason VARCHAR(500)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ",
+        "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS side VARCHAR(2)",
+        "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_winner BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS winner_side VARCHAR(10)",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS result_screenshot TEXT",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
     ]
     async with engine.begin() as conn:
         for sql in statements:

@@ -72,3 +72,9 @@ class TourBroadcastStates(StatesGroup):
 
 class AdminBroadcastStates(StatesGroup):
     text = State()
+
+
+class AdminFinishStates(StatesGroup):
+    """Админ завершает турнир: приз → скриншот → подтверждение."""
+    prize = State()
+    shot = State()

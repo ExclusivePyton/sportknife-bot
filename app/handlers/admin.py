@@ -13,9 +13,17 @@ from app.services import (
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
+    kick_player, finish_tournament, side_caps, SIDE_SHORT,
+)
+from app.keyboards import (
+    finish_winner_kb, finish_manual_kb, finish_confirm_kb, skip_kb,
+    admin_participants_kb, kick_confirm_kb,
 )
 from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb, player_actions_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates, AdminBroadcastStates
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates, AdminBroadcastStates, AdminFinishStates
+from app import live
+from html import escape
+import asyncio
 
 router = Router()
 
@@ -478,6 +486,7 @@ async def ct_finish(message: Message, state: FSMContext):
             fail += 1
         await asyncio.sleep(0.05)
     await message.answer(f"📣 Рассылка: доставлено {ok}, не доставлено {fail}.")
+    live.schedule_refresh(message.bot, None)
 
 @router.callback_query(lambda c: c.data == "admin:tours")
 async def admin_tours(call: CallbackQuery):
@@ -494,6 +503,7 @@ async def change_status(call, status):
         t=(await s.execute(select(Tournament).where(Tournament.id==tid).with_for_update())).scalar_one()
         t.status=status; await s.commit()
     await call.answer(f"Статус: {status.value}")
+    live.schedule_refresh(call.bot, tid)
 
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_open:"))
@@ -504,6 +514,7 @@ async def tour_open(call: CallbackQuery):
         t=(await s.execute(select(Tournament).where(Tournament.id==tid).with_for_update())).scalar_one()
         t.registration_open=True
         await s.commit()
+    live.schedule_refresh(call.bot, tid)
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_close:"))
 async def tour_close(call: CallbackQuery):
@@ -514,6 +525,7 @@ async def tour_close(call: CallbackQuery):
         t.registration_open=False
         await s.commit()
     await call.answer("Регистрация закрыта.")
+    live.schedule_refresh(call.bot, tid)
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_run:"))
 async def tour_run(call: CallbackQuery):
@@ -522,49 +534,376 @@ async def tour_run(call: CallbackQuery):
     tid = int(call.data.split(":")[1])
     async with SessionLocal() as s:
         t = (await s.execute(select(Tournament).where(Tournament.id == tid).with_for_update())).scalar_one()
+        if t.status in (TournamentStatus.finished, TournamentStatus.cancelled):
+            await call.answer("Турнир уже завершён или отменён", show_alert=True)
+            return
         t.status = TournamentStatus.running
         t.registration_open = False
         title = t.title
         await s.commit()
+        participants = set(await list_tournament_participant_ids(s, tid))
         ids = await list_all_telegram_ids(s)
     await call.answer("Турнир запущен")
-    import asyncio
-    text = (
+    live.schedule_refresh(call.bot, tid)
+    for_players = (
         f"▶️ <b>Турнир начался!</b>\n\n"
-        f"🏆 {title}\n"
+        f"🏆 {escape(title)}\n"
+        f"Ожидайте в игре, пока вас пригласят в лобби."
+    )
+    for_others = (
+        f"▶️ <b>Турнир начался!</b>\n\n"
+        f"🏆 {escape(title)}\n"
         f"Регистрация закрыта. Удачи участникам!"
     )
     for tg_id in ids:
         try:
-            await call.bot.send_message(tg_id, text)
+            await call.bot.send_message(tg_id, for_players if tg_id in participants else for_others)
         except Exception:
             pass
         await asyncio.sleep(0.05)
 
 
+# ---------------- завершение турнира: победитель → приз → скриншот → подтверждение ----------------
+
+async def _fin_load(tid):
+    async with SessionLocal() as s:
+        t = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one_or_none()
+        rows = (await s.execute(
+            select(Registration, User).join(User, User.id == Registration.user_id)
+            .where(Registration.tournament_id == tid).order_by(Registration.created_at, Registration.id)
+        )).all()
+    return t, rows
+
+
 @router.callback_query(lambda c: c.data.startswith("adm_tour_finish:"))
-async def tour_finish(call: CallbackQuery): await change_status(call, TournamentStatus.finished)
+async def tour_finish(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    tid = int(call.data.split(":")[1])
+    t, rows = await _fin_load(tid)
+    if not t:
+        await call.answer("Турнир не найден", show_alert=True); return
+    if t.status in (TournamentStatus.finished, TournamentStatus.cancelled):
+        await call.answer("Турнир уже завершён или отменён", show_alert=True); return
+    await state.clear()
+    await state.update_data(fin_tid=tid)
+    t_cap, ct_cap = side_caps(t)
+    n_t = sum(1 for r, _ in rows if r.side == "T")
+    n_ct = sum(1 for r, _ in rows if r.side == "CT")
+    await call.message.answer(
+        f"🏁 <b>Завершение турнира #{tid}</b> — {escape(t.title)}\n"
+        f"Игроков: {len(rows)} (🟠 Т {n_t} · 🔵 КТ {n_ct})\n\n"
+        "Кто победил?",
+        reply_markup=finish_winner_kb(tid),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "fin_cancel")
+async def fin_cancel(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    await state.clear()
+    await call.message.edit_text("❌ Завершение турнира отменено.")
+    await call.answer()
+
+
+async def _fin_ask_prize(call_or_msg, state, tid, winners, winner_side, text_head):
+    await state.update_data(fin_tid=tid, fin_winners=list(winners), fin_side=winner_side)
+    if not winners:
+        # без победителей приз не нужен — сразу к скриншоту
+        await state.update_data(fin_prize="0")
+        await state.set_state(AdminFinishStates.shot)
+        await call_or_msg.answer(
+            text_head + "\n\n📸 Пришлите <b>скриншот статистики</b> из игры (фото), чтобы игроки видели итог:",
+            reply_markup=skip_kb(),
+        )
+        return
+    await state.set_state(AdminFinishStates.prize)
+    await call_or_msg.answer(
+        text_head + "\n\n🪙 Сколько Gold получит <b>каждый</b> победитель? Введите число (<code>0</code> — без приза):"
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fin_side:"))
+async def fin_side(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    _, tid, side = call.data.split(":")
+    tid = int(tid)
+    t, rows = await _fin_load(tid)
+    winners = [u.id for r, u in rows if r.side == side]
+    if not winners:
+        await call.answer(f"За {SIDE_SHORT[side]} нет игроков — выберите другую сторону или вручную", show_alert=True)
+        return
+    await _fin_ask_prize(call.message, state, tid, winners, side,
+                         f"🏆 Победила сторона {SIDE_SHORT[side]} — победителей: {len(winners)}")
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fin_none:"))
+async def fin_none(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    tid = int(call.data.split(":")[1])
+    await _fin_ask_prize(call.message, state, tid, [], None, "➖ Турнир без победителей")
+    await call.answer()
+
+
+def _manual_rows(rows):
+    out = []
+    for r, u in rows:
+        side = SIDE_SHORT.get(r.side, "—")
+        out.append((r.id, f"{side} {r.nickname} ({r.game_id})"))
+    return out
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fin_manual:"))
+async def fin_manual(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    tid = int(call.data.split(":")[1])
+    t, rows = await _fin_load(tid)
+    if not rows:
+        await call.answer("В турнире нет игроков", show_alert=True); return
+    await state.update_data(fin_tid=tid, fin_sel=[])
+    await call.message.edit_text(
+        "👤 Отметьте победителей (нажимайте на игроков), затем «Далее»:",
+        reply_markup=finish_manual_kb(tid, _manual_rows(rows), set()),
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fin_tg:"))
+async def fin_toggle(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    _, tid, reg_id = call.data.split(":")
+    tid, reg_id = int(tid), int(reg_id)
+    d = await state.get_data()
+    sel = set(d.get("fin_sel", []))
+    sel.symmetric_difference_update({reg_id})
+    await state.update_data(fin_sel=list(sel))
+    t, rows = await _fin_load(tid)
+    try:
+        await call.message.edit_reply_markup(reply_markup=finish_manual_kb(tid, _manual_rows(rows), sel))
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fin_next:"))
+async def fin_next(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    tid = int(call.data.split(":")[1])
+    d = await state.get_data()
+    sel = set(d.get("fin_sel", []))
+    if not sel:
+        await call.answer("Выберите хотя бы одного победителя или вернитесь и нажмите «Без победителей»", show_alert=True)
+        return
+    t, rows = await _fin_load(tid)
+    winners = [u.id for r, u in rows if r.id in sel]
+    await _fin_ask_prize(call.message, state, tid, winners, "manual", f"👤 Выбрано победителей: {len(winners)}")
+    await call.answer()
+
+
+@router.message(AdminFinishStates.prize)
+async def fin_prize(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id): return
+    try:
+        prize = Decimal((message.text or "").replace(",", ".").strip())
+        if prize < 0: raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        await message.answer("Введите число 0 или больше, например <code>100</code>:")
+        return
+    await state.update_data(fin_prize=str(prize))
+    await state.set_state(AdminFinishStates.shot)
+    await message.answer(
+        "📸 Пришлите <b>скриншот статистики</b> из игры (фото), чтобы игроки видели, кто выиграл:",
+        reply_markup=skip_kb(),
+    )
+
+
+async def _fin_summary(state):
+    d = await state.get_data()
+    t, rows = await _fin_load(d["fin_tid"])
+    winners = set(d.get("fin_winners", []))
+    names = [f"{r.nickname} ({r.game_id})" for r, u in rows if u.id in winners]
+    side = d.get("fin_side")
+    if side in ("T", "CT"):
+        who = f"Победила сторона {SIDE_SHORT[side]}"
+    elif winners:
+        who = "Победители выбраны вручную"
+    else:
+        who = "Без победителей"
+    prize = Decimal(d.get("fin_prize", "0"))
+    text = (
+        f"🏁 <b>Подтвердите завершение турнира #{d['fin_tid']}</b> — {escape(t.title)}\n\n"
+        f"{who}\n"
+        + ("".join(f"• {escape(n)}\n" for n in names) if names else "")
+        + f"\n🪙 Приз каждому победителю: <b>{prize}</b> Gold"
+        + f"\n📊 Всего будет выдано: <b>{prize * len(winners)}</b> Gold"
+        + f"\n📸 Скриншот: {'прикреплён' if d.get('fin_shot') else 'нет'}\n\n"
+        "После подтверждения изменить итог нельзя."
+    )
+    return text
+
+
+@router.message(AdminFinishStates.shot, F.photo)
+async def fin_shot(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id): return
+    await state.update_data(fin_shot=message.photo[-1].file_id)
+    await message.answer(await _fin_summary(state), reply_markup=finish_confirm_kb())
+
+
+@router.message(AdminFinishStates.shot)
+async def fin_shot_need_photo(message: Message):
+    if not admin_only(message.from_user.id): return
+    await message.answer("Нужно именно фото (скриншот). Отправьте его как фото или нажмите «Без скриншота».", reply_markup=skip_kb())
+
+
+@router.callback_query(F.data == "fin_skip_shot")
+async def fin_skip_shot(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    if await state.get_state() != AdminFinishStates.shot.state:
+        await call.answer("Сначала начните завершение турнира", show_alert=True); return
+    await state.update_data(fin_shot=None)
+    await call.message.answer(await _fin_summary(state), reply_markup=finish_confirm_kb())
+    await call.answer()
+
+
+@router.callback_query(F.data == "fin_do")
+async def fin_do(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id): return
+    d = await state.get_data()
+    if "fin_tid" not in d or "fin_prize" not in d:
+        await call.answer("Данные устарели, начните заново", show_alert=True); return
+    tid = d["fin_tid"]
+    winners = d.get("fin_winners", [])
+    prize = Decimal(d["fin_prize"])
+    shot = d.get("fin_shot")
+    side = d.get("fin_side")
+    async with SessionLocal() as s:
+        try:
+            tour, regs = await finish_tournament(s, tid, winners, side, prize, shot)
+            await s.commit()
+        except Exception as e:
+            await s.rollback()
+            await state.clear()
+            await call.message.answer(f"❌ Не удалось завершить турнир: {e}")
+            await call.answer()
+            return
+        tg_by_user = {
+            u.id: u.telegram_id
+            for u in (await s.execute(select(User).where(User.id.in_([r.user_id for r in regs])))).scalars().all()
+        } if regs else {}
+        title = tour.title
+        winner_regs = [r for r in regs if r.is_winner]
+    await state.clear()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(
+        f"✅ Турнир #{tid} завершён. Победителей: {len(winner_regs)}"
+        + (f", выдано по {prize} Gold." if prize > 0 and winner_regs else ".")
+    )
+    await call.answer()
+    live.schedule_refresh(call.bot, tid)
+
+    # уведомление всех участников с итогом и скриншотом
+    if side in ("T", "CT"):
+        who = f"🏆 Победила сторона {SIDE_SHORT[side]}"
+    elif winner_regs:
+        who = "🏆 Победители: " + ", ".join(escape(r.nickname) for r in winner_regs)
+    else:
+        who = "Победители не назначены"
+    head = f"🏁 Турнир <b>{escape(title)}</b> завершён!\n{who}"
+    for r in regs:
+        tg_id = tg_by_user.get(r.user_id)
+        if not tg_id: continue
+        text = head
+        if r.is_winner:
+            text += "\n\n🎉 Вы победили!" + (f" Вам начислено <b>{prize}</b> Gold." if prize > 0 else "")
+        try:
+            if shot:
+                await call.bot.send_photo(tg_id, shot, caption=text)
+            else:
+                await call.bot.send_message(tg_id, text)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_cancel:"))
 async def tour_cancel(call: CallbackQuery): await change_status(call, TournamentStatus.cancelled)
+
+async def _send_admin_participants(call: CallbackQuery, tid: int):
+    t, rows = await _fin_load(tid)
+    if not rows:
+        await call.message.answer("👥 Участников пока нет.")
+        return
+    text = f"👥 <b>Участники турнира #{tid}</b> ({len(rows)}/{t.max_participants})\n\n"
+    for i, (r, u) in enumerate(rows, 1):
+        text += f"{i}. {SIDE_SHORT.get(r.side, '—')} | {escape(u.nickname or r.nickname or '—')} | Game ID: <code>{escape(r.game_id)}</code> | TG: <code>{u.telegram_id}</code>\n"
+    can_kick = t.status in (TournamentStatus.open, TournamentStatus.running)
+    kb = admin_participants_kb(tid, [(u.id, f"{u.nickname or r.nickname or '—'} ({r.game_id})") for r, u in rows]) if can_kick else None
+    await call.message.answer(text, reply_markup=kb)
+
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_part:"))
 async def tour_participants(call: CallbackQuery):
     if not admin_only(call.from_user.id): return
     tid=int(call.data.split(":")[1])
-    async with SessionLocal() as s:
-        rows=(await s.execute(
-            select(Registration, User).join(User, User.id==Registration.user_id)
-            .where(Registration.tournament_id==tid).order_by(Registration.created_at)
-        )).all()
-    if not rows:
-        await call.message.answer("👥 Участников пока нет.")
-    else:
-        text = "👥 <b>Участники</b>\n\n"
-        for i, (r, u) in enumerate(rows, 1):
-            text += f"{i}. {u.nickname or '—'} | Game ID: {r.game_id} | TG: {u.telegram_id}\n"
-        await call.message.answer(text)
+    await _send_admin_participants(call, tid)
     await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("kick:"))
+async def kick_ask(call: CallbackQuery):
+    if not admin_only(call.from_user.id): return
+    _, tid, uid = call.data.split(":")
+    tid, uid = int(tid), int(uid)
+    async with SessionLocal() as s:
+        t = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one_or_none()
+        u = (await s.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        reg = (await s.execute(select(Registration).where(Registration.user_id == uid, Registration.tournament_id == tid))).scalar_one_or_none()
+    if not (t and u and reg):
+        await call.answer("Игрок уже не в турнире", show_alert=True); return
+    paid = t.registration_cost > 0
+    await call.message.answer(
+        f"🚫 Выгнать <b>{escape(u.nickname or reg.nickname or '—')}</b> (Game ID <code>{escape(reg.game_id)}</code>) "
+        f"из турнира «{escape(t.title)}»?"
+        + (f"\nРегистрация стоила {t.registration_cost} Gold." if paid else ""),
+        reply_markup=kick_confirm_kb(tid, uid, paid),
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("kick_do:"))
+async def kick_do(call: CallbackQuery):
+    if not admin_only(call.from_user.id): return
+    _, tid, uid, refund = call.data.split(":")
+    tid, uid, refund = int(tid), int(uid), refund == "1"
+    async with SessionLocal() as s:
+        try:
+            refunded, reopened, user = await kick_player(s, tid, uid, refund)
+            await s.commit()
+        except Exception as e:
+            await s.rollback()
+            await call.message.edit_text(f"❌ Не удалось выгнать игрока: {e}")
+            await call.answer()
+            return
+        tg_id = user.telegram_id
+        t = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one()
+        title = t.title
+    msg = "✅ Игрок исключён из турнира."
+    if refunded > 0: msg += f" Возвращено {refunded} Gold."
+    if reopened: msg += " Регистрация снова открыта."
+    await call.message.edit_text(msg)
+    await call.answer()
+    live.schedule_refresh(call.bot, tid)
+    note = f"🚫 Вы исключены из турнира <b>{escape(title)}</b> администратором."
+    if refunded > 0: note += f"\n🪙 Возвращено: {refunded} Gold."
+    note += "\nЕсли это ошибка — напишите в поддержку."
+    try:
+        await call.bot.send_message(tg_id, note)
+    except Exception:
+        pass
+
 
 @router.callback_query(lambda c: c.data.startswith("adm_results:"))
 async def result_start(call: CallbackQuery, state: FSMContext):

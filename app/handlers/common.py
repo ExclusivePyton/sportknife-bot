@@ -123,6 +123,8 @@ async def support(message: Message):
 
 @router.callback_query(F.data == "back_main")
 async def back_main(call: CallbackQuery):
+    from app import live
+    live.untrack(call.message.chat.id, call.message.message_id)
     try:
         await call.message.delete()
     except Exception:
