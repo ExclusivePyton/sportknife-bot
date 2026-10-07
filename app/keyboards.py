@@ -38,10 +38,12 @@ def tournament_list(items):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def tournament_detail(tid, registered=False):
+def tournament_detail(tid, registered=False, can_leave=False):
     rows = []
     if not registered:
         rows.append([InlineKeyboardButton(text="✅ Зарегистрироваться", callback_data=f"reg:{tid}")])
+    elif can_leave:
+        rows.append([InlineKeyboardButton(text="🚪 Выйти из турнира", callback_data=f"unreg:{tid}")])
     rows.append([InlineKeyboardButton(text="⬅️ К турнирам", callback_data="tours")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -64,6 +66,7 @@ def admin_menu():
         [InlineKeyboardButton(text="👥 Участники", callback_data="admin:participants")],
         [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data="admin:gold")],
         [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin:users")],
+        [InlineKeyboardButton(text="✏️ Править игрока", callback_data="admin:edit_user")],
         [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="admin:promo_create")],
         [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo_list")],
         [InlineKeyboardButton(text="📢 Обязательные каналы", callback_data="admin:channels")],

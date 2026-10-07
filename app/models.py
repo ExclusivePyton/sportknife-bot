@@ -33,6 +33,7 @@ class WithdrawalStatus(str, Enum):
 class TransactionType(str, Enum):
     admin_credit = "admin_credit"
     registration = "registration"
+    registration_refund = "registration_refund"
     prize = "prize"
     withdrawal_hold = "withdrawal_hold"
     withdrawal_paid = "withdrawal_paid"

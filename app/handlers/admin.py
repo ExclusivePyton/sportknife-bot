@@ -12,9 +12,10 @@ from app.services import (
     get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result,
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
+    list_all_telegram_ids,
 )
 from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates
 
 router = Router()
 
@@ -420,8 +421,37 @@ async def ct_finish(message: Message, state: FSMContext):
         db.add(t)
         await db.commit()
         await db.refresh(t)
+        tid = t.id
+        title = t.title
+        fmt = t.format
+        slots = t.max_participants
+        cost = t.registration_cost
+        from app.timeutil import format_msk
+        start_str = format_msk(t.start_at)
+        ids = await list_all_telegram_ids(db)
     await state.clear()
-    await message.answer(f"✅ Турнир создан: <b>#{t.id}</b> — {t.title}")
+    await message.answer(f"✅ Турнир создан: <b>#{tid}</b> — {title}")
+
+    # Рассылка всем пользователям бота
+    cost_txt = "бесплатно" if cost == 0 else f"{cost} Gold"
+    announce = (
+        f"🏆 <b>Новый турнир!</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"📅 {start_str} (МСК)\n"
+        f"🎮 Формат: {fmt} | Слотов: {slots}\n"
+        f"🪙 Регистрация: {cost_txt}\n\n"
+        f"Откройте «🏆 Турниры» в боте, чтобы записаться."
+    )
+    ok = fail = 0
+    import asyncio
+    for tg_id in ids:
+        try:
+            await message.bot.send_message(tg_id, announce)
+            ok += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.05)
+    await message.answer(f"📣 Рассылка: доставлено {ok}, не доставлено {fail}.")
 
 @router.callback_query(lambda c: c.data == "admin:tours")
 async def admin_tours(call: CallbackQuery):
@@ -460,7 +490,31 @@ async def tour_close(call: CallbackQuery):
     await call.answer("Регистрация закрыта.")
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_run:"))
-async def tour_run(call: CallbackQuery): await change_status(call, TournamentStatus.running)
+async def tour_run(call: CallbackQuery):
+    if not admin_only(call.from_user.id):
+        return
+    tid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        t = (await s.execute(select(Tournament).where(Tournament.id == tid).with_for_update())).scalar_one()
+        t.status = TournamentStatus.running
+        t.registration_open = False
+        title = t.title
+        await s.commit()
+        ids = await list_all_telegram_ids(s)
+    await call.answer("Турнир запущен")
+    import asyncio
+    text = (
+        f"▶️ <b>Турнир начался!</b>\n\n"
+        f"🏆 {title}\n"
+        f"Регистрация закрыта. Удачи участникам!"
+    )
+    for tg_id in ids:
+        try:
+            await call.bot.send_message(tg_id, text)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_finish:"))
 async def tour_finish(call: CallbackQuery): await change_status(call, TournamentStatus.finished)
@@ -745,7 +799,7 @@ async def admin_channels(call: CallbackQuery):
 async def admin_channel_add(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
         return
-    await state.set_state(AdminChannelStates.waiting)
+    await state.set_state(AdminChannelStates, AdminEditUserStates.waiting)
     await call.message.answer(
         "Пришлите:\n"
         "• пересланное сообщение из канала, или\n"
@@ -756,7 +810,7 @@ async def admin_channel_add(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(AdminChannelStates.waiting)
+@router.message(AdminChannelStates, AdminEditUserStates.waiting)
 async def admin_channel_save(message: Message, state: FSMContext):
     if not admin_only(message.from_user.id):
         return
@@ -833,3 +887,137 @@ async def admin_channel_off(call: CallbackQuery):
             return
     await call.message.edit_reply_markup(reply_markup=None)
     await call.answer(f"Канал {ch.title or ch.chat_id} убран из обязательных.")
+
+
+# ---------- Правка профиля игрока ----------
+
+@router.callback_query(lambda c: c.data == "admin:edit_user")
+async def admin_edit_user(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    await state.set_state(AdminEditUserStates.search)
+    await call.message.answer(
+        "✏️ Правка игрока\n\n"
+        "Введите Game ID (8 цифр), Telegram ID или часть ника:"
+    )
+    await call.answer()
+
+
+@router.message(AdminEditUserStates.search)
+async def admin_edit_search(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    async with SessionLocal() as s:
+        users = []
+        if text.isdigit():
+            tid = int(text)
+            q = select(User).where((User.game_id == text) | (User.telegram_id == tid)).limit(20)
+            users = (await s.execute(q)).scalars().all()
+        if not users:
+            like = f"%{text}%"
+            users = (
+                await s.execute(
+                    select(User).where(
+                        (User.nickname.ilike(like))
+                        | (User.username.ilike(like))
+                        | (User.game_id.ilike(like))
+                    ).order_by(User.id.desc()).limit(20)
+                )
+            ).scalars().all()
+    if not users:
+        await message.answer("Игрок не найден. Попробуйте ещё раз:")
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    rows = []
+    for u in users:
+        rows.append([InlineKeyboardButton(
+            text=f"🎮 {u.game_id or '—'} | {u.nickname or u.username or '—'} | {u.telegram_id}",
+            callback_data=f"edit_user:{u.id}",
+        )])
+    await state.clear()
+    await message.answer("Выберите игрока:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("edit_user:"))
+async def edit_user_pick(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    uid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not u:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await state.update_data(edit_user_id=uid)
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎮 Изменить Game ID", callback_data="edit_field:game_id")],
+        [InlineKeyboardButton(text="🏷 Изменить NickName", callback_data="edit_field:nickname")],
+    ])
+    await call.message.answer(
+        f"Игрок: 🎮 <code>{u.game_id or '—'}</code>\n"
+        f"Ник: {u.nickname or '—'}\n"
+        f"TG: <code>{u.telegram_id}</code>\n\n"
+        "Что изменить?",
+        reply_markup=kb,
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("edit_field:"))
+async def edit_field_pick(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    field = call.data.split(":")[1]
+    await state.update_data(edit_field=field)
+    await state.set_state(AdminEditUserStates.value)
+    if field == "game_id":
+        await call.message.answer("Введите новый Game ID (ровно 8 цифр):")
+    else:
+        await call.message.answer("Введите новый NickName:")
+    await call.answer()
+
+
+@router.message(AdminEditUserStates.value)
+async def edit_user_value(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    d = await state.get_data()
+    uid = d.get("edit_user_id")
+    field = d.get("edit_field")
+    value = (message.text or "").strip()
+    if not uid or not field:
+        await state.clear()
+        await message.answer("Сессия сброшена. Начните снова из админ-панели.")
+        return
+    if field == "game_id":
+        if not (value.isdigit() and len(value) == 8):
+            await message.answer("Game ID должен быть ровно 8 цифр. Попробуйте ещё раз:")
+            return
+    elif field == "nickname":
+        if not value or len(value) > 64:
+            await message.answer("Ник от 1 до 64 символов. Попробуйте ещё раз:")
+            return
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.id == uid).with_for_update())).scalar_one_or_none()
+        if not u:
+            await message.answer("Игрок не найден.")
+            await state.clear()
+            return
+        if field == "game_id":
+            u.game_id = value
+        else:
+            u.nickname = value
+        tg_id = u.telegram_id
+        await s.commit()
+    await state.clear()
+    await message.answer(f"✅ Обновлено: <b>{field}</b> = <code>{value}</code>")
+    try:
+        label = "Game ID" if field == "game_id" else "NickName"
+        await message.bot.send_message(
+            tg_id,
+            f"✏️ Администратор изменил ваш {label}:\n<code>{value}</code>",
+        )
+    except Exception:
+        pass

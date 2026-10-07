@@ -57,3 +57,9 @@ class StartGameIdStates(StatesGroup):
 class AdminChannelStates(StatesGroup):
     """Админ добавляет обязательный канал."""
     waiting = State()
+
+
+class AdminEditUserStates(StatesGroup):
+    search = State()
+    field = State()
+    value = State()

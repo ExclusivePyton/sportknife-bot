@@ -267,3 +267,45 @@ async def deactivate_channel(session, channel_id: int) -> RequiredChannel:
     ).scalar_one()
     ch.is_active = False
     return ch
+
+
+async def cancel_registration(session, user_id, tournament_id):
+    """Выход из турнира. Возврат Gold, если регистрация была платной."""
+    user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
+    if tour.status not in (TournamentStatus.open, TournamentStatus.running):
+        raise ValueError("Нельзя выйти: турнир уже завершён или отменён")
+    if tour.status == TournamentStatus.running:
+        raise ValueError("Турнир уже идёт — выход закрыт")
+    if not tour.registration_open and tour.status == TournamentStatus.open:
+        # разрешаем выход пока турнир open, даже если регистрация закрыта
+        pass
+    reg = (
+        await session.execute(
+            select(Registration).where(
+                Registration.user_id == user_id,
+                Registration.tournament_id == tournament_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not reg:
+        raise ValueError("Вы не зарегистрированы в этом турнире")
+    cost = Decimal(tour.registration_cost)
+    await session.delete(reg)
+    if cost > 0:
+        user.balance += cost
+        session.add(
+            Transaction(
+                user_id=user.id,
+                amount=cost,
+                type=TransactionType.registration_refund,
+                description=f"Возврат за выход из турнира #{tour.id}",
+                reference_id=str(tour.id),
+            )
+        )
+    return cost
+
+
+async def list_all_telegram_ids(session):
+    rows = (await session.execute(select(User.telegram_id))).scalars().all()
+    return list(rows)
