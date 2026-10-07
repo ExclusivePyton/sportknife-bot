@@ -61,6 +61,9 @@ class User(Base):
     third_places: Mapped[int] = mapped_column(Integer, default=0)
     total_earned: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     total_withdrawn: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    ban_reason: Mapped[str | None] = mapped_column(String(500))
+    banned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     registrations: Mapped[list["Registration"]] = relationship(back_populates="user")

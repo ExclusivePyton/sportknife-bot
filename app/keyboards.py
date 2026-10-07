@@ -98,8 +98,8 @@ def admin_tournament_actions(tid):
             ],
             [InlineKeyboardButton(text="❌ Отменить", callback_data=f"adm_tour_cancel:{tid}")],
             [InlineKeyboardButton(text="👥 Участники", callback_data=f"adm_tour_part:{tid}")],
+            [InlineKeyboardButton(text="📣 Рассылка участникам", callback_data=f"adm_tour_bc:{tid}")],
             [InlineKeyboardButton(text="🏅 Результаты", callback_data=f"adm_results:{tid}")],
-            [InlineKeyboardButton(text="✏️ Изменить", callback_data=f"adm_edit:{tid}")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:tours")],
         ]
     )

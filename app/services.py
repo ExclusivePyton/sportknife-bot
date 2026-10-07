@@ -56,7 +56,18 @@ async def create_registration(session, user_id, tournament_id):
     nick = user.nickname or user.username or user.game_id
     reg = Registration(user_id=user.id, tournament_id=tour.id, game_id=user.game_id, nickname=nick)
     session.add(reg)
-    return reg
+    await session.flush()
+    # после регистрации: если слоты заполнены — закрыть регистрацию
+    new_count = (
+        await session.execute(
+            select(func.count(Registration.id)).where(Registration.tournament_id == tournament_id)
+        )
+    ).scalar_one()
+    filled = False
+    if new_count >= tour.max_participants:
+        tour.registration_open = False
+        filled = True
+    return reg, filled
 
 async def create_withdrawal(session, user_id, amount, skin, pattern, screenshot):
     user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
@@ -292,6 +303,7 @@ async def cancel_registration(session, user_id, tournament_id):
         raise ValueError("Вы не зарегистрированы в этом турнире")
     cost = Decimal(tour.registration_cost)
     await session.delete(reg)
+    await session.flush()
     if cost > 0:
         user.balance += cost
         session.add(
@@ -303,9 +315,51 @@ async def cancel_registration(session, user_id, tournament_id):
                 reference_id=str(tour.id),
             )
         )
-    return cost
+    # если турнир open и есть свободный слот — снова открыть регистрацию
+    left = (
+        await session.execute(
+            select(func.count(Registration.id)).where(Registration.tournament_id == tournament_id)
+        )
+    ).scalar_one()
+    reopened = False
+    if tour.status == TournamentStatus.open and left < tour.max_participants:
+        tour.registration_open = True
+        reopened = True
+    return cost, reopened
 
 
 async def list_all_telegram_ids(session):
     rows = (await session.execute(select(User.telegram_id))).scalars().all()
+    return list(rows)
+
+
+async def get_user_by_id(session, user_id: int):
+    return (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+
+
+async def ban_user(session, user_id: int, reason: str):
+    u = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    from datetime import datetime, timezone
+    u.is_banned = True
+    u.ban_reason = reason
+    u.banned_at = datetime.now(timezone.utc)
+    return u
+
+
+async def unban_user(session, user_id: int):
+    u = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    u.is_banned = False
+    u.ban_reason = None
+    u.banned_at = None
+    return u
+
+
+async def list_tournament_participant_ids(session, tournament_id: int):
+    rows = (
+        await session.execute(
+            select(User.telegram_id)
+            .join(Registration, Registration.user_id == User.id)
+            .where(Registration.tournament_id == tournament_id)
+        )
+    ).scalars().all()
     return list(rows)

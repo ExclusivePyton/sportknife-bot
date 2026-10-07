@@ -35,12 +35,11 @@ async def render_tour(tid, uid):
         ).scalar_one_or_none()
         cost = "Бесплатно" if t.registration_cost == 0 else f"{t.registration_cost} Gold"
         reg_status = "открыта" if t.registration_open else "закрыта"
-        start_str = format_msk(t.start_at)
         registered = bool(reg)
         can_leave = registered and t.status == TournamentStatus.open
         text = (
             f"🏆 <b>{t.title}</b>\n\n{t.description}\n\n"
-            f"📅 {start_str} <i>(МСК)</i>\n"
+            f"📅 Старт: когда наберётся полный состав\n"
             f"🎮 Формат: {t.format}\n👥 Слоты: {count}/{t.max_participants}\n"
             f"🪙 Стоимость регистрации: {cost}\n🏅 Призы: {t.prize_fund}\n"
             f"📜 Условия: {t.conditions}\n"
@@ -112,15 +111,21 @@ async def register_cb(call: CallbackQuery):
             await s.commit()
             await call.answer("Сначала укажите Game ID через /start", show_alert=True)
             return
+        filled = False
         try:
-            await create_registration(s, u.id, tid)
+            result = await create_registration(s, u.id, tid)
+            if isinstance(result, tuple):
+                _, filled = result
             await s.commit()
         except Exception as e:
             await s.rollback()
             await call.answer(str(e), show_alert=True)
             return
         uid = u.id
-    await call.answer("Регистрация успешна!", show_alert=True)
+    msg = "Регистрация успешна!"
+    if filled:
+        msg = "Регистрация успешна! Состав набран — регистрация закрыта."
+    await call.answer(msg, show_alert=True)
     text, registered, can_leave = await render_tour(tid, uid)
     await call.message.edit_text(
         text,
@@ -133,8 +138,13 @@ async def unregister_cb(call: CallbackQuery):
     tid = int(call.data.split(":")[1])
     async with SessionLocal() as s:
         u = await get_or_create_user(s, call.from_user)
+        reopened = False
         try:
-            refund = await cancel_registration(s, u.id, tid)
+            result = await cancel_registration(s, u.id, tid)
+            if isinstance(result, tuple):
+                refund, reopened = result
+            else:
+                refund = result
             await s.commit()
         except Exception as e:
             await s.rollback()
@@ -144,6 +154,8 @@ async def unregister_cb(call: CallbackQuery):
     msg = "Вы вышли из турнира."
     if refund and refund > 0:
         msg += f" Возвращено {refund} Gold."
+    if reopened:
+        msg += " Регистрация снова открыта."
     await call.answer(msg, show_alert=True)
     text, registered, can_leave = await render_tour(tid, uid)
     await call.message.edit_text(

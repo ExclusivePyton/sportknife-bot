@@ -12,10 +12,10 @@ from app.services import (
     get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result,
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
-    list_all_telegram_ids,
+    list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
 )
 from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates
 
 router = Router()
 
@@ -289,11 +289,12 @@ async def ct_desc(message: Message, state: FSMContext):
         await message.answer("Описание не может быть пустым. Введите описание:")
         return
     await state.update_data(description=desc)
-    await state.set_state(TournamentCreateStates.start_at)
+    await state.set_state(TournamentCreateStates.format)
+    from app.keyboards import format_choice_kb
     await message.answer(
-        "Введите дату и время старта <b>по Москве (МСК)</b>:\n"
-        "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
-        "Пример: <code>15.10.2026 18:30</code>"
+        "Старт турнира — <b>когда наберётся полный состав</b>.\n\n"
+        "Выберите <b>формат</b> (в скобках число слотов):",
+        reply_markup=format_choice_kb(),
     )
 
 
@@ -408,7 +409,7 @@ async def ct_finish(message: Message, state: FSMContext):
         t = Tournament(
             title=d["title"],
             description=d["description"],
-            start_at=datetime.fromisoformat(d["start_at"]),
+            start_at=__import__("app.timeutil", fromlist=["now_msk"]).now_msk(),
             format=d["format"],
             max_participants=d["max_participants"],
             registration_cost=Decimal(d["cost"]),
@@ -824,9 +825,9 @@ async def admin_channel_save(message: Message, state: FSMContext):
         username = chat.username
         title = chat.title or ""
     elif message.text:
-        text = message.text.strip()
-        if text.startswith("@"):
-            username = text.lstrip("@")
+        text_in = message.text.strip()
+        if text_in.startswith("@"):
+            username = text_in.lstrip("@")
             try:
                 chat = await message.bot.get_chat(f"@{username}")
                 chat_id = chat.id
@@ -835,15 +836,15 @@ async def admin_channel_save(message: Message, state: FSMContext):
             except Exception as e:
                 await message.answer(f"❌ Не удалось найти канал @{username}: {e}")
                 return
-        elif text.lstrip("-").isdigit():
-            chat_id = int(text)
+        elif text_in.lstrip("-").isdigit():
+            chat_id = int(text_in)
             try:
                 chat = await message.bot.get_chat(chat_id)
                 username = chat.username
                 title = chat.title or str(chat_id)
             except Exception as e:
                 await message.answer(
-                    f"❌ Не удалось получить канал {chat_id}: {e}\n"
+                    f"❌ Не удалось получить канал {chat_id}: {e}. "
                     "Убедитесь, что бот добавлен в канал как администратор."
                 )
                 return
@@ -852,6 +853,23 @@ async def admin_channel_save(message: Message, state: FSMContext):
             return
     else:
         await message.answer("Пришлите @username, chat_id или пересланное сообщение из канала.")
+        return
+
+    try:
+        me = await message.bot.get_me()
+        member = await message.bot.get_chat_member(chat_id, me.id)
+        from aiogram.enums import ChatMemberStatus
+        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            await message.answer(
+                "❌ Бот не администратор этого канала. "
+                "Добавьте бота в канал как администратора "
+                "(права: управление пользователями / просмотр участников) и попробуйте снова."
+            )
+            return
+    except Exception as e:
+        await message.answer(
+            f"❌ Не удалось проверить канал. Добавьте бота как администратора. Ошибка: {e}"
+        )
         return
 
     async with SessionLocal() as s:
@@ -865,11 +883,11 @@ async def admin_channel_save(message: Message, state: FSMContext):
             return
     await state.clear()
     await message.answer(
-        f"✅ Канал добавлен как обязательный:\n"
-        f"<b>{ch.title}</b>\n"
-        f"chat_id: <code>{ch.chat_id}</code>\n"
-        f"username: @{ch.username or '—'}"
+        f"✅ Канал успешно добавлен!\n\n<b>{ch.title}</b>\n"
+        f"chat_id: <code>{ch.chat_id}</code>\nusername: @{ch.username or '—'}\n\n"
+        "Теперь при входе в бота будет проверка подписки."
     )
+
 
 
 @router.callback_query(lambda c: c.data.startswith("ch_off:"))
@@ -954,6 +972,7 @@ async def edit_user_pick(call: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Изменить Game ID", callback_data="edit_field:game_id")],
         [InlineKeyboardButton(text="🏷 Изменить NickName", callback_data="edit_field:nickname")],
+        ([InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"unban:{u.id}")] if getattr(u, "is_banned", False) else [InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"ban:{u.id}")]),
     ])
     await call.message.answer(
         f"Игрок: 🎮 <code>{u.game_id or '—'}</code>\n"
@@ -1021,3 +1040,97 @@ async def edit_user_value(message: Message, state: FSMContext):
         )
     except Exception:
         pass
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("ban:"))
+async def ban_start(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    uid = int(call.data.split(":")[1])
+    await state.update_data(ban_user_id=uid)
+    await state.set_state(AdminBanStates.reason)
+    await call.message.answer("Введите причину блокировки (увидит игрок):")
+    await call.answer()
+
+
+@router.message(AdminBanStates.reason)
+async def ban_reason(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("Причина не может быть пустой:")
+        return
+    d = await state.get_data()
+    uid = d.get("ban_user_id")
+    async with SessionLocal() as s:
+        u = await ban_user(s, uid, reason)
+        await s.commit()
+        tg_id = u.telegram_id
+    await state.clear()
+    await message.answer(f"🚫 Игрок заблокирован. Причина: {reason}")
+    try:
+        from app.keyboards import SUPPORT_USERNAME
+        await message.bot.send_message(
+            tg_id,
+            f"🚫 Вы заблокированы в боте.\n\nПричина: {reason}\n\nДля обжалования пишите в поддержку: @{SUPPORT_USERNAME}",
+        )
+    except Exception:
+        await message.answer("⚠️ Сообщение игроку отправить не удалось.")
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("unban:"))
+async def unban_cb(call: CallbackQuery):
+    if not admin_only(call.from_user.id):
+        return
+    uid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        u = await unban_user(s, uid)
+        await s.commit()
+        tg_id = u.telegram_id
+    await call.answer("Разблокирован")
+    await call.message.answer(f"✅ Игрок {u.game_id or tg_id} разблокирован.")
+    try:
+        await call.bot.send_message(tg_id, "✅ Вы снова разблокированы в боте.")
+    except Exception:
+        pass
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("adm_tour_bc:"))
+async def tour_bc_start(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    tid = int(call.data.split(":")[1])
+    await state.update_data(bc_tour_id=tid)
+    await state.set_state(TourBroadcastStates.text)
+    await call.message.answer("📣 Введите текст рассылки для участников этого турнира:")
+    await call.answer()
+
+
+@router.message(TourBroadcastStates.text)
+async def tour_bc_send(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    body_text = (message.text or "").strip()
+    if not body_text:
+        await message.answer("Текст пустой. Введите сообщение:")
+        return
+    d = await state.get_data()
+    tid = d.get("bc_tour_id")
+    await state.clear()
+    async with SessionLocal() as s:
+        ids = await list_tournament_participant_ids(s, tid)
+    if not ids:
+        await message.answer("Участников нет.")
+        return
+    import asyncio
+    ok = fail = 0
+    body = f"📣 <b>Сообщение по турниру #{tid}</b>\n\n{body_text}"
+    for tg_id in ids:
+        try:
+            await message.bot.send_message(tg_id, body)
+            ok += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.05)
+    await message.answer(f"Рассылка участникам: доставлено {ok}, не доставлено {fail}.")

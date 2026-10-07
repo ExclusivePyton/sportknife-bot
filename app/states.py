@@ -63,3 +63,9 @@ class AdminEditUserStates(StatesGroup):
     search = State()
     field = State()
     value = State()
+
+class AdminBanStates(StatesGroup):
+    reason = State()
+
+class TourBroadcastStates(StatesGroup):
+    text = State()
