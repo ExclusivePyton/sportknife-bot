@@ -14,7 +14,7 @@ from app.services import (
     list_all_channels, add_required_channel, deactivate_channel,
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
 )
-from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb
+from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb, player_actions_kb
 from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates
 
 router = Router()
@@ -41,7 +41,7 @@ async def _send_users_page(message_or_call, page: int = 0):
         ).scalars().all()
     text = (
         f"👥 <b>Игроки бота</b> (стр. {page+1}/{total_pages}, всего {total})\n\n"
-        "Нажмите на игрока, чтобы выдать Gold."
+        "Нажмите на игрока: Gold / ник / ID / бан."
     )
     kb = users_list_kb(users, page, total_pages)
     if hasattr(message_or_call, "message") and message_or_call.message:
@@ -57,6 +57,7 @@ async def _send_users_page(message_or_call, page: int = 0):
 
 @router.callback_query(lambda c: c.data == "admin:gold")
 async def admin_gold(call: CallbackQuery, state: FSMContext):
+    # устаревшая кнопка — тот же список игроков
     if not admin_only(call.from_user.id):
         return
     await state.clear()
@@ -84,6 +85,25 @@ async def noop_cb(call: CallbackQuery):
     await call.answer()
 
 
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("act_gold:"))
+async def act_gold(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    uid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not u:
+        await call.answer("Не найден", show_alert=True)
+        return
+    await state.update_data(tid=u.telegram_id, user_db_id=u.id)
+    await state.set_state(AdminGoldStates.amount)
+    await call.message.answer(
+        f"🪙 Выдача Gold игроку <code>{u.game_id or u.telegram_id}</code>\nВведите количество:"
+    )
+    await call.answer()
+
 @router.callback_query(lambda c: c.data == "admin:gold_tid")
 async def admin_gold_tid(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
@@ -93,7 +113,7 @@ async def admin_gold_tid(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.callback_query(lambda c: c.data == "admin:gold_search")
+@router.callback_query(lambda c: c.data in ("admin:gold_search", "admin:user_search"))
 async def admin_gold_search(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
         return
@@ -113,13 +133,18 @@ async def gold_pick(call: CallbackQuery, state: FSMContext):
     if not u:
         await call.answer("Игрок не найден", show_alert=True)
         return
-    await state.update_data(tid=u.telegram_id, user_db_id=u.id)
-    await state.set_state(AdminGoldStates.amount)
-    await call.message.answer(
-        f"Игрок: 🎮 <code>{u.game_id or '—'}</code> | {u.nickname or u.username or '—'}\n"
-        f"TG: <code>{u.telegram_id}</code> | баланс: {u.balance} Gold\n\n"
-        "Введите количество Gold:"
+    await state.clear()
+    ban_line = "🚫 ЗАБЛОКИРОВАН" if getattr(u, "is_banned", False) else "активен"
+    text = (
+        f"👤 <b>Игрок</b>\n"
+        f"🎮 Game ID: <code>{u.game_id or '—'}</code>\n"
+        f"🏷 Ник: {u.nickname or u.username or '—'}\n"
+        f"🆔 TG: <code>{u.telegram_id}</code>\n"
+        f"🪙 Баланс: {u.balance} Gold\n"
+        f"Статус: {ban_line}\n\n"
+        "Выберите действие:"
     )
+    await call.message.answer(text, reply_markup=player_actions_kb(u.id, getattr(u, "is_banned", False)))
     await call.answer()
 
 
@@ -913,12 +938,9 @@ async def admin_channel_off(call: CallbackQuery):
 async def admin_edit_user(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
         return
-    await state.set_state(AdminEditUserStates.search)
-    await call.message.answer(
-        "✏️ Правка игрока\n\n"
-        "Введите Game ID (8 цифр), Telegram ID или часть ника:"
-    )
-    await call.answer()
+    await state.clear()
+    await _send_users_page(call, 0)
+
 
 
 @router.message(AdminEditUserStates.search)
@@ -988,8 +1010,12 @@ async def edit_user_pick(call: CallbackQuery, state: FSMContext):
 async def edit_field_pick(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
         return
-    field = call.data.split(":")[1]
-    await state.update_data(edit_field=field)
+    parts = call.data.split(":")
+    field = parts[1]
+    if len(parts) >= 3:
+        await state.update_data(edit_user_id=int(parts[2]), edit_field=field)
+    else:
+        await state.update_data(edit_field=field)
     await state.set_state(AdminEditUserStates.value)
     if field == "game_id":
         await call.message.answer("Введите новый Game ID (ровно 8 цифр):")

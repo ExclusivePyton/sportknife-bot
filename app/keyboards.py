@@ -64,9 +64,7 @@ def admin_menu():
         [InlineKeyboardButton(text="🏆 Создать турнир", callback_data="admin:create_tour")],
         [InlineKeyboardButton(text="📋 Управление турнирами", callback_data="admin:tours")],
         [InlineKeyboardButton(text="👥 Участники", callback_data="admin:participants")],
-        [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data="admin:gold")],
         [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin:users")],
-        [InlineKeyboardButton(text="✏️ Править игрока", callback_data="admin:edit_user")],
         [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="admin:promo_create")],
         [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo_list")],
         [InlineKeyboardButton(text="📢 Обязательные каналы", callback_data="admin:channels")],
@@ -197,12 +195,20 @@ def users_list_kb(users, page: int, total_pages: int):
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"users_page:{page+1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="🔎 Поиск по Game ID", callback_data="admin:gold_search")])
-    rows.append([InlineKeyboardButton(text="🆔 Ввести Telegram ID", callback_data="admin:gold_tid")])
+    rows.append([InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:user_search")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def gold_pick_confirm_kb(user_id: int):
+def player_actions_kb(user_id: int, is_banned: bool = False):
+    ban_row = (
+        [InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"unban:{user_id}")]
+        if is_banned
+        else [InlineKeyboardButton(text="🚫 Заблокировать", callback_data=f"ban:{user_id}")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data=f"gold_pick:{user_id}")],
+        [InlineKeyboardButton(text="🪙 Выдать Gold", callback_data=f"act_gold:{user_id}")],
+        [InlineKeyboardButton(text="🏷 Изменить NickName", callback_data=f"edit_field:nickname:{user_id}")],
+        [InlineKeyboardButton(text="🎮 Изменить Game ID", callback_data=f"edit_field:game_id:{user_id}")],
+        ban_row,
+        [InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:users")],
     ])
