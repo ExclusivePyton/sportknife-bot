@@ -56,9 +56,16 @@ async def tournaments(message: Message):
             await s.execute(
                 select(Tournament)
                 .where(Tournament.status.in_([TournamentStatus.open, TournamentStatus.running]))
-                .order_by(Tournament.start_at)
+                .order_by(Tournament.id.desc())
             )
         ).scalars().all()
+        counts = {}
+        for t in items:
+            counts[t.id] = (
+                await s.execute(
+                    select(func.count(Registration.id)).where(Registration.tournament_id == t.id)
+                )
+            ).scalar_one()
     if not items:
         await message.answer(
             "🏆 Сейчас доступных турниров нет.",
@@ -67,7 +74,7 @@ async def tournaments(message: Message):
         return
     await message.answer(
         "🏆 <b>Доступные турниры</b>\nВыберите турнир:",
-        reply_markup=tournament_list(items),
+        reply_markup=tournament_list(items, counts),
     )
 
 
@@ -78,12 +85,19 @@ async def tours_cb(call: CallbackQuery):
             await s.execute(
                 select(Tournament)
                 .where(Tournament.status.in_([TournamentStatus.open, TournamentStatus.running]))
-                .order_by(Tournament.start_at)
+                .order_by(Tournament.id.desc())
             )
         ).scalars().all()
+        counts = {}
+        for _t in items:
+            counts[_t.id] = (
+                await s.execute(
+                    select(func.count(Registration.id)).where(Registration.tournament_id == _t.id)
+                )
+            ).scalar_one()
     await call.message.edit_text(
         "🏆 <b>Доступные турниры</b>",
-        reply_markup=tournament_list(items),
+        reply_markup=tournament_list(items, counts),
     )
     await call.answer()
 
@@ -131,6 +145,24 @@ async def register_cb(call: CallbackQuery):
         text,
         reply_markup=tournament_detail(tid, registered, can_leave),
     )
+    if filled:
+        # уведомить всех участников
+        from app.services import list_tournament_participant_ids
+        async with SessionLocal() as s:
+            ids = await list_tournament_participant_ids(s, tid)
+            t = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one_or_none()
+            title = t.title if t else str(tid)
+        import asyncio
+        note = (
+            f"🏁 Состав турнира <b>{title}</b> набран!\n"
+            "Регистрация закрыта. Ожидайте старта от администратора."
+        )
+        for tg_id in ids:
+            try:
+                await call.bot.send_message(tg_id, note)
+            except Exception:
+                pass
+            await asyncio.sleep(0.03)
 
 
 @router.callback_query(lambda c: c.data.startswith("unreg:"))

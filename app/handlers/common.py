@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from app.db import SessionLocal
@@ -132,3 +132,12 @@ async def back_main(call: CallbackQuery):
         reply_markup=main_menu(is_admin(call.from_user.id)),
     )
     await call.answer()
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Действие отменено.",
+        reply_markup=main_menu(is_admin(message.from_user.id)),
+    )

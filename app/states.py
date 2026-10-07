@@ -69,3 +69,6 @@ class AdminBanStates(StatesGroup):
 
 class TourBroadcastStates(StatesGroup):
     text = State()
+
+class AdminBroadcastStates(StatesGroup):
+    text = State()

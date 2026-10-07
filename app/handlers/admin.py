@@ -15,7 +15,7 @@ from app.services import (
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
 )
 from app.keyboards import admin_menu, admin_tournament_actions, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb, player_actions_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates, AdminBroadcastStates
 
 router = Router()
 
@@ -1160,3 +1160,39 @@ async def tour_bc_send(message: Message, state: FSMContext):
             fail += 1
         await asyncio.sleep(0.05)
     await message.answer(f"Рассылка участникам: доставлено {ok}, не доставлено {fail}.")
+
+
+@router.callback_query(lambda c: c.data == "admin:broadcast")
+async def admin_broadcast(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    await state.set_state(AdminBroadcastStates.text)
+    await call.message.answer(
+        "📣 Введите текст рассылки <b>всем</b> пользователям бота:\n"
+        "Отмена: /cancel"
+    )
+    await call.answer()
+
+
+@router.message(AdminBroadcastStates.text)
+async def admin_broadcast_send(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    body_text = (message.text or "").strip()
+    if not body_text:
+        await message.answer("Текст пустой:")
+        return
+    await state.clear()
+    async with SessionLocal() as s:
+        ids = await list_all_telegram_ids(s)
+    import asyncio
+    ok = fail = 0
+    body = f"📣 <b>Сообщение от администрации</b>\n\n{body_text}"
+    for tg_id in ids:
+        try:
+            await message.bot.send_message(tg_id, body)
+            ok += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.05)
+    await message.answer(f"Рассылка завершена: доставлено {ok}, ошибок {fail}.")

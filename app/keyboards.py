@@ -30,10 +30,19 @@ def back_kb():
     )
 
 
-def tournament_list(items):
+def tournament_list(items, counts: dict | None = None):
+    """counts: {tournament_id: registered_count}"""
+    counts = counts or {}
     rows = []
     for t in items:
-        rows.append([InlineKeyboardButton(text=f"🏆 {t.title}", callback_data=f"tour:{t.id}")])
+        n = counts.get(t.id, "?")
+        open_mark = "🟢" if t.registration_open else "🔒"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{open_mark} {t.title} [{n}/{t.max_participants}] {t.format}",
+                callback_data=f"tour:{t.id}",
+            )
+        ])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -65,6 +74,7 @@ def admin_menu():
         [InlineKeyboardButton(text="📋 Управление турнирами", callback_data="admin:tours")],
         [InlineKeyboardButton(text="👥 Участники", callback_data="admin:participants")],
         [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin:users")],
+        [InlineKeyboardButton(text="📣 Рассылка всем", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="admin:promo_create")],
         [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo_list")],
         [InlineKeyboardButton(text="📢 Обязательные каналы", callback_data="admin:channels")],
