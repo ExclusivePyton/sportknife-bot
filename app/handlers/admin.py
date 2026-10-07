@@ -799,7 +799,7 @@ async def admin_channels(call: CallbackQuery):
 async def admin_channel_add(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
         return
-    await state.set_state(AdminChannelStates, AdminEditUserStates.waiting)
+    await state.set_state(AdminChannelStates.waiting)
     await call.message.answer(
         "Пришлите:\n"
         "• пересланное сообщение из канала, или\n"
@@ -810,7 +810,7 @@ async def admin_channel_add(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(AdminChannelStates, AdminEditUserStates.waiting)
+@router.message(AdminChannelStates.waiting)
 async def admin_channel_save(message: Message, state: FSMContext):
     if not admin_only(message.from_user.id):
         return
