@@ -13,6 +13,12 @@ async def ensure_schema() -> None:
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS winner_side VARCHAR(10)",
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS result_screenshot TEXT",
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_id INTEGER",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_rewarded BOOLEAN DEFAULT FALSE",
+        """CREATE TABLE IF NOT EXISTS bot_settings (
+            key VARCHAR(64) PRIMARY KEY,
+            value VARCHAR(255) DEFAULT ''
+        )""",
     ]
     async with engine.begin() as conn:
         for sql in statements:

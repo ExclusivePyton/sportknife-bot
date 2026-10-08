@@ -6,14 +6,26 @@ from sqlalchemy.exc import IntegrityError
 from app.models import (
     User, Tournament, Registration, Transaction, TransactionType,
     Withdrawal, WithdrawalStatus, TournamentStatus, TournamentResult,
-    PromoCode, PromoRedemption, RequiredChannel,
+    PromoCode, PromoRedemption, RequiredChannel, BotSetting,
 )
 
-async def get_or_create_user(session, tg_user):
+async def get_or_create_user(session, tg_user, referrer_telegram_id: int | None = None):
     result = await session.execute(select(User).where(User.telegram_id == tg_user.id))
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(telegram_id=tg_user.id, username=tg_user.username)
+        referred_by_id = None
+        if referrer_telegram_id and referrer_telegram_id != tg_user.id:
+            ref = (
+                await session.execute(select(User).where(User.telegram_id == referrer_telegram_id))
+            ).scalar_one_or_none()
+            if ref and not getattr(ref, "is_banned", False):
+                referred_by_id = ref.id
+        user = User(
+            telegram_id=tg_user.id,
+            username=tg_user.username,
+            referred_by_id=referred_by_id,
+            referral_rewarded=False,
+        )
         session.add(user)
         await session.flush()
     else:
@@ -209,7 +221,7 @@ async def get_history(session, user_id, limit: int = 15):
     return deposits, withdrawals
 
 
-MIN_WITHDRAWAL = Decimal("10")
+MIN_WITHDRAWAL = Decimal("2500")
 
 
 async def create_withdrawal(session, user_id, amount, skin, pattern, screenshot):
@@ -528,3 +540,84 @@ async def is_game_id_taken(session, game_id: str, exclude_user_id: int | None = 
     if exclude_user_id is not None:
         q = q.where(User.id != exclude_user_id)
     return (await session.execute(q.limit(1))).scalar_one_or_none() is not None
+
+
+DEFAULT_REFERRAL_REWARD = Decimal("50")
+
+
+async def get_setting(session, key: str, default: str = "") -> str:
+    row = (await session.execute(select(BotSetting).where(BotSetting.key == key))).scalar_one_or_none()
+    return row.value if row else default
+
+
+async def set_setting(session, key: str, value: str) -> None:
+    row = (await session.execute(select(BotSetting).where(BotSetting.key == key))).scalar_one_or_none()
+    if row is None:
+        session.add(BotSetting(key=key, value=value))
+    else:
+        row.value = value
+
+
+async def get_referral_reward(session) -> Decimal:
+    raw = await get_setting(session, "referral_reward", str(DEFAULT_REFERRAL_REWARD))
+    try:
+        return Decimal(raw)
+    except Exception:
+        return DEFAULT_REFERRAL_REWARD
+
+
+async def set_referral_reward(session, amount: Decimal) -> None:
+    if amount < 0:
+        raise ValueError("Сумма не может быть отрицательной")
+    await set_setting(session, "referral_reward", str(amount))
+
+
+async def count_referrals(session, user_id: int) -> tuple[int, int]:
+    """(всего приглашённых, сколько уже с наградой)."""
+    total = (
+        await session.execute(select(func.count(User.id)).where(User.referred_by_id == user_id))
+    ).scalar_one()
+    rewarded = (
+        await session.execute(
+            select(func.count(User.id)).where(
+                User.referred_by_id == user_id,
+                User.referral_rewarded == True,  # noqa: E712
+            )
+        )
+    ).scalar_one()
+    return int(total), int(rewarded)
+
+
+async def try_complete_referral(session, user_id: int) -> tuple[bool, Decimal, int | None]:
+    """Если реферал выполнил условия (подписка проверяется снаружи) — начислить пригласившему.
+
+    Возвращает (успех, сумма, telegram_id пригласившего).
+    """
+    user = (
+        await session.execute(select(User).where(User.id == user_id).with_for_update())
+    ).scalar_one_or_none()
+    if not user or not user.referred_by_id or user.referral_rewarded:
+        return False, Decimal(0), None
+    if not user.game_id:
+        return False, Decimal(0), None
+    if getattr(user, "is_banned", False):
+        return False, Decimal(0), None
+
+    referrer = (
+        await session.execute(select(User).where(User.id == user.referred_by_id).with_for_update())
+    ).scalar_one_or_none()
+    if not referrer or getattr(referrer, "is_banned", False):
+        return False, Decimal(0), None
+
+    amount = await get_referral_reward(session)
+    user.referral_rewarded = True
+    if amount > 0:
+        await add_gold(
+            session,
+            referrer.id,
+            amount,
+            TransactionType.referral,
+            f"Реферал: игрок {user.telegram_id}",
+            reference_id=str(user.id),
+        )
+    return True, amount, referrer.telegram_id

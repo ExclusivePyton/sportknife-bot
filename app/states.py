@@ -78,3 +78,7 @@ class AdminFinishStates(StatesGroup):
     """Админ завершает турнир: приз → скриншот → подтверждение."""
     prize = State()
     shot = State()
+
+
+class AdminReferralStates(StatesGroup):
+    amount = State()

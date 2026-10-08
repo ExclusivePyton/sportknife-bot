@@ -12,7 +12,7 @@ router = Router()
 async def withdraw_start(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(WithdrawalStates.amount)
-    await message.answer("💸 Введите сумму вывода в Gold\n(минимум <b>10</b>, одна заявка в обработке):")
+    await message.answer("💸 Введите сумму вывода в Gold\n(минимум <b>2500</b>, одна заявка в обработке):")
 
 @router.message(WithdrawalStates.amount)
 async def wd_amount(message: Message, state: FSMContext):

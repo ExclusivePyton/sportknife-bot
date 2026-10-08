@@ -8,7 +8,8 @@ def main_menu(is_admin=False):
         [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📜 История")],
         [KeyboardButton(text="💸 Вывод"), KeyboardButton(text="🎁 Промокод")],
-        [KeyboardButton(text="📖 Правила"), KeyboardButton(text="💬 Поддержка")],
+        [KeyboardButton(text="👥 Рефералы"), KeyboardButton(text="📖 Правила")],
+        [KeyboardButton(text="💬 Поддержка")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админ-панель")])
@@ -111,6 +112,7 @@ def admin_menu():
         [InlineKeyboardButton(text="🎁 Создать промокод", callback_data="admin:promo_create")],
         [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo_list")],
         [InlineKeyboardButton(text="📢 Обязательные каналы", callback_data="admin:channels")],
+        [InlineKeyboardButton(text="👥 Реф. награда", callback_data="admin:referral")],
         [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin:withdrawals")],
         [InlineKeyboardButton(text="📊 Общая статистика", callback_data="admin:stats")],
         [InlineKeyboardButton(text="👤 Найти игрока", callback_data="admin:find")],

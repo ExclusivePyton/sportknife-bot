@@ -14,13 +14,14 @@ from app.services import (
     list_all_channels, add_required_channel, deactivate_channel,
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
     kick_player, finish_tournament, side_caps, SIDE_SHORT,
+    get_referral_reward, set_referral_reward,
 )
 from app.keyboards import (
     finish_winner_kb, finish_manual_kb, finish_confirm_kb, skip_kb,
     admin_participants_kb, kick_confirm_kb,
 )
 from app.keyboards import admin_menu, admin_tournament_actions, admin_tours_list_kb, withdrawal_actions, promo_deactivate_kb, channel_remove_kb, users_list_kb, player_actions_kb, main_menu, cancel_reply_kb
-from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates, AdminBroadcastStates, AdminFinishStates
+from app.states import AdminGoldStates, AdminFindStates, TournamentCreateStates, ResultStates, AdminPromoStates, AdminChannelStates, AdminEditUserStates, AdminBanStates, TourBroadcastStates, AdminBroadcastStates, AdminFinishStates, AdminReferralStates
 from app import live
 from html import escape
 import asyncio
@@ -1594,3 +1595,44 @@ async def admin_broadcast_send(message: Message, state: FSMContext):
             fail += 1
         await asyncio.sleep(0.05)
     await message.answer(f"Рассылка завершена: доставлено {ok}, ошибок {fail}.")
+
+
+@router.callback_query(lambda c: c.data == "admin:referral")
+async def admin_referral(call: CallbackQuery, state: FSMContext):
+    if not admin_only(call.from_user.id):
+        return
+    async with SessionLocal() as s:
+        amount = await get_referral_reward(s)
+    await state.set_state(AdminReferralStates.amount)
+    await call.message.answer(
+        "👥 <b>Реферальная награда</b>\n\n"
+        f"Сейчас: <b>{amount}</b> Gold за друга\n"
+        "(друг должен перейти по ссылке, подписаться на канал и указать Game ID)\n\n"
+        "Введите новую сумму (число, можно 0):\n"
+        "Отмена: /cancel",
+        reply_markup=cancel_reply_kb(),
+    )
+    await call.answer()
+
+
+@router.message(AdminReferralStates.amount)
+async def admin_referral_set(message: Message, state: FSMContext):
+    if not admin_only(message.from_user.id):
+        return
+    raw = (message.text or "").replace(",", ".").strip()
+    try:
+        amount = Decimal(raw)
+    except Exception:
+        await message.answer("Введите число (например 50):")
+        return
+    if amount < 0:
+        await message.answer("Не может быть отрицательной:")
+        return
+    async with SessionLocal() as s:
+        await set_referral_reward(s, amount)
+        await s.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ Награда за реферала: <b>{amount}</b> Gold",
+        reply_markup=main_menu(True),
+    )

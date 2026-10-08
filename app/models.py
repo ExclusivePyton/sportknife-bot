@@ -40,6 +40,7 @@ class TransactionType(str, Enum):
     withdrawal_release = "withdrawal_release"
     manual_debit = "manual_debit"
     promo = "promo"
+    referral = "referral"
 
 
 class User(Base):
@@ -64,6 +65,8 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     ban_reason: Mapped[str | None] = mapped_column(String(500))
     banned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    referred_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    referral_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     registrations: Mapped[list["Registration"]] = relationship(back_populates="user")
@@ -217,3 +220,10 @@ class RequiredChannel(Base):
     title: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BotSetting(Base):
+    """Ключевые настройки бота (награда за реферала и т.д.)."""
+    __tablename__ = "bot_settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), default="")
