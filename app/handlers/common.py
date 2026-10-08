@@ -14,6 +14,7 @@ from app.keyboards import main_menu, subscription_kb, SUPPORT_USERNAME
 from app.config import settings
 from app.states import StartGameIdStates
 from app.middlewares import check_subscriptions
+from app.assets_util import asset
 
 router = Router()
 
@@ -104,15 +105,18 @@ async def start(message: Message, state: FSMContext):
 
     me = await message.bot.get_me()
     link = f"https://t.me/{me.username}?start=ref{message.from_user.id}"
-    await message.answer(
-        "⚔️ <b>StandKnife Tournaments</b>\n"
-        "━━━━━━━━━━━━━━━━\n"
-        f"🎮 Game ID: <code>{user.game_id}</code>\n\n"
-        f"👥 Реферальная ссылка (за друга +{reward} Gold после его подписки):\n"
-        f"<code>{link}</code>\n\n"
-        "Выберите раздел в меню ниже 👇",
-        reply_markup=main_menu(is_admin(message.from_user.id)),
+    photo = asset("welcome.png")
+    caption = (
+        f"⚔️ <b>StandKnife Tournaments</b>\n"
+        f"🎮 Game ID: <code>{user.game_id}</code>\n"
+        f"👥 Реф. ссылка (+{reward} Gold):\n<code>{link}</code>"
     )
+    if photo:
+        await message.answer_photo(
+            photo, caption=caption, reply_markup=main_menu(is_admin(message.from_user.id))
+        )
+    else:
+        await message.answer(caption, reply_markup=main_menu(is_admin(message.from_user.id)))
 
 
 @router.message(StartGameIdStates.waiting)
@@ -248,25 +252,12 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @router.message(F.text.in_({"📖 Правила", "📖 Помощь", "/help"}))
 async def help_msg(message: Message):
-    await message.answer(
-        "📖 <b>Правила StandKnife Tournaments</b>\n"
-        "━━━━━━━━━━━━━━━━\n\n"
-        "<b>Запрещено:</b>\n"
-        "• использование читов, багов и стороннего ПО в игре\n"
-        "• абуз Gold, накрутка, мультиаккаунты ради наград\n"
-        "• передача аккаунта / Game ID другим лицам\n"
-        "• оскорбления, токсичность, срыв турниров\n"
-        "• фейковые скриншоты и обман администрации\n"
-        "• абуз реферальной системы (накрутка приглашений)\n\n"
-        "<b>Наказание:</b> бан в боте без возврата Gold, "
-        "дисквалификация с турниров.\n\n"
-        "<b>Как играть:</b>\n"
-        "1) Подписка на каналы\n"
-        "2) Game ID (8 цифр)\n"
-        "3) Регистрация на турнир (сторона Т / КТ)\n"
-        "4) Старт → ждут инвайт в лобби в игре\n"
-        "5) Админ завершает матч и выдаёт призы\n\n"
-        "💸 Мин. вывод: <b>2500</b> Gold (одна заявка в обработке)\n"
-        "👥 Рефералы — кнопка «Рефералы» в меню\n\n"
+    photo = asset("rules.png")
+    caption = (
+        "📖 Полные правила на картинке.\n"
         f"💬 Поддержка: @{SUPPORT_USERNAME}"
     )
+    if photo:
+        await message.answer_photo(photo, caption=caption)
+    else:
+        await message.answer(caption)
