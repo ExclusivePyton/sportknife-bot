@@ -26,9 +26,9 @@ _pending: set = set()
 _tasks: set = set()
 
 
-def track(chat_id: int, message_id: int, kind: str, tid: int | None = None, user_id: int | None = None, media: bool = False) -> None:
+def track(chat_id: int, message_id: int, kind: str, tid: int | None = None, user_id: int | None = None) -> None:
     key = (chat_id, message_id)
-    _views[key] = {"kind": kind, "tid": tid, "user_id": user_id, "ts": time.time(), "media": media}
+    _views[key] = {"kind": kind, "tid": tid, "user_id": user_id, "ts": time.time()}
     _views.move_to_end(key)
     while len(_views) > MAX_VIEWS:
         _views.popitem(last=False)
@@ -38,14 +38,11 @@ def untrack(chat_id: int, message_id: int) -> None:
     _views.pop((chat_id, message_id), None)
 
 
-async def _edit(bot, chat_id: int, message_id: int, text: str, kb, media: bool = False) -> bool:
+async def _edit(bot, chat_id: int, message_id: int, text: str, kb) -> bool:
     """True — сообщение живо (или не изменилось); False — его больше нельзя редактировать."""
     for attempt in range(2):
         try:
-            if media:
-                await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, reply_markup=kb)
-            else:
-                await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb)
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb)
             return True
         except TelegramRetryAfter as e:
             if attempt == 0:
@@ -80,11 +77,11 @@ async def _refresh(bot, tid: int | None) -> None:
                 text, kb = list_cache
             elif tid is not None and v["tid"] == tid:
                 if v["kind"] == "detail":
-                    text, kb, _photo = await render_tour(tid, v["user_id"])
+                    text, kb = await render_tour(tid, v["user_id"])
                 elif v["kind"] == "pick_reg":
-                    text, kb, _photo = await render_pick(tid, v["user_id"], "reg")
+                    text, kb = await render_pick(tid, v["user_id"], "reg")
                 elif v["kind"] == "pick_sw":
-                    text, kb, _photo = await render_pick(tid, v["user_id"], "sw")
+                    text, kb = await render_pick(tid, v["user_id"], "sw")
                 else:
                     continue
             else:
@@ -92,7 +89,7 @@ async def _refresh(bot, tid: int | None) -> None:
         except Exception:
             log.exception("live render failed")
             continue
-        alive = await _edit(bot, chat_id, message_id, text, kb, media=bool(v.get("media")))
+        alive = await _edit(bot, chat_id, message_id, text, kb)
         if not alive:
             _views.pop((chat_id, message_id), None)
         await asyncio.sleep(EDIT_DELAY)

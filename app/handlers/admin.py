@@ -485,6 +485,7 @@ async def ct_finish(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Турнир создан: <b>#{tid}</b> — {title}")
 
+    # Рассылка всем пользователям бота
     cost_txt = "бесплатно" if cost == 0 else f"{cost} Gold"
     announce = (
         f"🏆 <b>Новый турнир!</b>\n\n"
