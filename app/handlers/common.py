@@ -137,6 +137,7 @@ async def back_main(call: CallbackQuery):
 
 
 @router.message(Command("cancel"))
+@router.message(F.text.in_({"❌ Отмена", "Отмена", "отмена"}))
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(

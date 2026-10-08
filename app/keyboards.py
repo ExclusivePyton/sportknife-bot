@@ -126,23 +126,48 @@ def promo_deactivate_kb(promo_id: int):
     )
 
 
+def admin_tours_list_kb(tours):
+    """Компактный список турниров — сначала выбираешь один."""
+    rows = []
+    for t in tours:
+        st = getattr(t.status, "value", str(t.status))
+        rows.append([
+            InlineKeyboardButton(
+                text=f"#{t.id} {t.title} · {st}",
+                callback_data=f"adm_pick:{t.id}",
+            )
+        ])
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Турниров нет", callback_data="noop")])
+    rows.append([InlineKeyboardButton(text="⬅️ В админ-меню", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def admin_tournament_actions(tid):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="🟢 Открыть", callback_data=f"adm_tour_open:{tid}"),
-                InlineKeyboardButton(text="🔒 Закрыть регистрацию", callback_data=f"adm_tour_close:{tid}"),
+                InlineKeyboardButton(text="🔒 Закрыть рег.", callback_data=f"adm_tour_close:{tid}"),
             ],
             [
                 InlineKeyboardButton(text="▶️ Начать", callback_data=f"adm_tour_run:{tid}"),
                 InlineKeyboardButton(text="🏁 Завершить", callback_data=f"adm_tour_finish:{tid}"),
             ],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data=f"adm_tour_cancel:{tid}")],
+            [InlineKeyboardButton(text="❌ Отменить турнир", callback_data=f"adm_tour_cancel:{tid}")],
             [InlineKeyboardButton(text="👥 Участники", callback_data=f"adm_tour_part:{tid}")],
             [InlineKeyboardButton(text="📣 Рассылка участникам", callback_data=f"adm_tour_bc:{tid}")],
-            [InlineKeyboardButton(text="🏅 Результаты", callback_data=f"adm_results:{tid}")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:tours")],
+            [InlineKeyboardButton(text="⬅️ К списку турниров", callback_data="admin:tours")],
         ]
+    )
+
+
+def cancel_reply_kb():
+    """Кнопка выхода из любого текстового ввода админа."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отмена")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 

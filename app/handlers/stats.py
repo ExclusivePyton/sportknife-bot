@@ -26,8 +26,6 @@ async def stats(message: Message):
         f"🏷 Ник: {u.nickname or '—'}\n\n"
         f"🏆 Сыграно турниров: <b>{played}</b>\n"
         f"🥇 Побед: <b>{wins}</b>\n"
-        f"🥈 2 места: <b>{u.second_places}</b>\n"
-        f"🥉 3 места: <b>{u.third_places}</b>\n"
         f"📈 Винрейт: <b>{winrate}</b>\n\n"
         f"💰 Всего заработано: <b>{u.total_earned}</b> Gold\n"
         f"💸 Выведено: <b>{u.total_withdrawn}</b> Gold\n"
