@@ -48,6 +48,19 @@ async def main():
     dp.include_router(withdrawals_router)
     dp.include_router(promo_router)
 
+    @dp.errors()
+    async def _on_error(event, exception=None):
+        # aiogram 3: event may be ErrorEvent
+        log.exception("Unhandled error: %s", getattr(event, "exception", exception))
+        try:
+            upd = getattr(event, "update", None)
+            if upd and upd.callback_query:
+                await upd.callback_query.answer("Произошла ошибка, попробуйте ещё раз", show_alert=True)
+            elif upd and upd.message:
+                await upd.message.answer("⚠️ Произошла ошибка. Попробуйте /start или /cancel")
+        except Exception:
+            pass
+
     me = await bot.get_me()
     log.info("Starting bot @%s", me.username)
     await dp.start_polling(bot)

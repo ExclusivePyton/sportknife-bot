@@ -67,6 +67,8 @@ async def create_registration(session, user_id, tournament_id, side):
     if side not in SIDES:
         raise ValueError("Выберите сторону: Т или КТ")
     user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    if getattr(user, "is_banned", False):
+        raise ValueError("Вы заблокированы и не можете регистрироваться")
     tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
     if tour.status != TournamentStatus.open or not tour.registration_open:
         raise ValueError("Регистрация закрыта")
@@ -207,13 +209,28 @@ async def get_history(session, user_id, limit: int = 15):
     return deposits, withdrawals
 
 
+MIN_WITHDRAWAL = Decimal("10")
+
+
 async def create_withdrawal(session, user_id, amount, skin, pattern, screenshot):
     user = (await session.execute(select(User).where(User.id == user_id).with_for_update())).scalar_one()
+    if getattr(user, "is_banned", False):
+        raise ValueError("Вы заблокированы и не можете выводить Gold")
     amount = Decimal(amount)
-    if amount <= 0:
-        raise ValueError("Сумма должна быть положительной")
+    if amount < MIN_WITHDRAWAL:
+        raise ValueError(f"Минимальная сумма вывода — {MIN_WITHDRAWAL} Gold")
     if amount > available_balance(user):
         raise ValueError("Нельзя вывести больше доступного Gold")
+    pending = (await session.execute(
+        select(func.count(Withdrawal.id)).where(
+            Withdrawal.user_id == user_id,
+            Withdrawal.status == WithdrawalStatus.pending,
+        )
+    )).scalar_one()
+    if pending:
+        raise ValueError("У вас уже есть заявка в обработке. Дождитесь решения по ней.")
+    if not (skin or "").strip():
+        raise ValueError("Укажите название скина")
     if not pattern.strip():
         raise ValueError("Pattern обязателен")
     if not screenshot:
@@ -316,6 +333,9 @@ async def create_promo(
 
 
 async def redeem_promo(session, user_id: int, code: str) -> PromoCode:
+    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user and getattr(user, "is_banned", False):
+        raise ValueError("Вы заблокированы")
     """Активировать промокод. Один пользователь — один раз на код.
     Защита через FOR UPDATE + unique constraint.
     """
@@ -501,3 +521,10 @@ async def list_tournament_participant_ids(session, tournament_id: int):
         )
     ).scalars().all()
     return list(rows)
+
+
+async def is_game_id_taken(session, game_id: str, exclude_user_id: int | None = None) -> bool:
+    q = select(User.id).where(User.game_id == game_id)
+    if exclude_user_id is not None:
+        q = q.where(User.id != exclude_user_id)
+    return (await session.execute(q.limit(1))).scalar_one_or_none() is not None

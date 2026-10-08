@@ -48,8 +48,10 @@ async def start(message: Message, state: FSMContext):
         return
 
     await message.answer(
-        "👋 С возвращением в <b>StandKnife Tournaments</b>!\n\n"
-        f"🎮 Ваш Game ID: <code>{user.game_id}</code>",
+        "⚔️ <b>StandKnife Tournaments</b>\n"
+        "━━━━━━━━━━━━━━━━\n"
+        f"🎮 Game ID: <code>{user.game_id}</code>\n\n"
+        "Выберите раздел в меню ниже 👇",
         reply_markup=main_menu(is_admin(message.from_user.id)),
     )
 
@@ -63,12 +65,18 @@ async def save_start_game_id(message: Message, state: FSMContext):
         )
         return
     async with SessionLocal() as session:
+        from app.services import is_game_id_taken
         user = await get_or_create_user(session, message.from_user)
         if user.game_id:
             await state.clear()
             await message.answer(
                 f"Game ID уже задан: <code>{user.game_id}</code>",
                 reply_markup=main_menu(is_admin(message.from_user.id)),
+            )
+            return
+        if await is_game_id_taken(session, text):
+            await message.answer(
+                "❌ Этот Game ID уже занят другим игроком. Введите свой уникальный ID:"
             )
             return
         user.game_id = text
@@ -143,4 +151,21 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await message.answer(
         "Действие отменено.",
         reply_markup=main_menu(is_admin(message.from_user.id)),
+    )
+
+@router.message(F.text.in_({"📖 Правила", "📖 Помощь", "/help"}))
+async def help_msg(message: Message):
+    await message.answer(
+        "📖 <b>Как пользоваться ботом</b>\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ Подпишитесь на обязательные каналы\n"
+        "2️⃣ Укажите Game ID (8 цифр)\n"
+        "3️⃣ В «🏆 Турниры» запишитесь на матч\n"
+        "    — выберите сторону <b>Т</b> или <b>КТ</b>\n"
+        "4️⃣ Дождитесь старта — в игре вас пригласят в лобби\n"
+        "5️⃣ После матча админ завершит турнир и выдаст призы\n\n"
+        "🪙 <b>Gold</b> — внутриигровая валюта турниров.\n"
+        "💸 Вывод — через заявку (мин. 10 Gold), одна активная заявка.\n"
+        "🎁 Промокоды — раздел «Промокод».\n\n"
+        f"💬 Поддержка: @{SUPPORT_USERNAME}"
     )

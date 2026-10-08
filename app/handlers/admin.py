@@ -9,7 +9,7 @@ from app.db import SessionLocal
 from app.timeutil import parse_msk
 from app.models import User, Tournament, Registration, Withdrawal, WithdrawalStatus, TournamentStatus, PromoCode
 from app.services import (
-    get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result,
+    get_or_create_user, add_gold, pay_withdrawal, reject_withdrawal, apply_result, is_game_id_taken,
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
@@ -996,13 +996,29 @@ async def all_participants(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "admin:stats")
 async def admin_stats(call: CallbackQuery):
-    if not admin_only(call.from_user.id): return
+    if not admin_only(call.from_user.id):
+        return
     async with SessionLocal() as s:
-        users=(await s.execute(select(func.count(User.id)))).scalar_one()
-        tours=(await s.execute(select(func.count(Tournament.id)))).scalar_one()
-        wds=(await s.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status==WithdrawalStatus.pending))).scalar_one()
-    await call.message.answer(f"📊 <b>Общая статистика</b>\n\n👤 Пользователей: {users}\n🏆 Турниров: {tours}\n💸 Заявок в обработке: {wds}")
+        users = (await s.execute(select(func.count(User.id)))).scalar_one()
+        banned = (await s.execute(select(func.count(User.id)).where(User.is_banned == True))).scalar_one()
+        tours = (await s.execute(select(func.count(Tournament.id)))).scalar_one()
+        open_t = (await s.execute(select(func.count(Tournament.id)).where(Tournament.status == TournamentStatus.open))).scalar_one()
+        run_t = (await s.execute(select(func.count(Tournament.id)).where(Tournament.status == TournamentStatus.running))).scalar_one()
+        regs = (await s.execute(select(func.count(Registration.id)))).scalar_one()
+        wds = (await s.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == WithdrawalStatus.pending))).scalar_one()
+        promos = (await s.execute(select(func.count(PromoCode.id)).where(PromoCode.is_active == True))).scalar_one()
+    await call.message.answer(
+        "📊 <b>Общая статистика</b>\n"
+        "━━━━━━━━━━━━━━━━\n"
+        f"👤 Игроков: <b>{users}</b> (🚫 бан: {banned})\n"
+        f"🏆 Турниров: <b>{tours}</b>\n"
+        f"   🟢 открыто: {open_t} · ▶️ идёт: {run_t}\n"
+        f"📝 Регистраций всего: <b>{regs}</b>\n"
+        f"💸 Заявок на вывод: <b>{wds}</b>\n"
+        f"🎁 Активных промо: <b>{promos}</b>"
+    )
     await call.answer()
+
 
 @router.callback_query(lambda c: c.data == "admin:find")
 async def admin_find(call: CallbackQuery, state: FSMContext):
@@ -1418,6 +1434,10 @@ async def edit_user_value(message: Message, state: FSMContext):
         if not (value.isdigit() and len(value) == 8):
             await message.answer("Game ID должен быть ровно 8 цифр. Попробуйте ещё раз:")
             return
+        async with SessionLocal() as s:
+            if await is_game_id_taken(s, value, exclude_user_id=uid):
+                await message.answer("Этот Game ID уже занят. Введите другой:")
+                return
     elif field == "nickname":
         if not value or len(value) > 64:
             await message.answer("Ник от 1 до 64 символов. Попробуйте ещё раз:")

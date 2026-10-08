@@ -8,7 +8,7 @@ def main_menu(is_admin=False):
         [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📜 История")],
         [KeyboardButton(text="💸 Вывод"), KeyboardButton(text="🎁 Промокод")],
-        [KeyboardButton(text="💬 Поддержка")],
+        [KeyboardButton(text="📖 Правила"), KeyboardButton(text="💬 Поддержка")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админ-панель")])

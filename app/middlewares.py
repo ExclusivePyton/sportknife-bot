@@ -1,4 +1,8 @@
 from typing import Any, Awaitable, Callable, Dict
+import logging
+import time
+from collections import defaultdict
+
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, CallbackQuery, TelegramObject
 from aiogram.enums import ChatMemberStatus
@@ -8,6 +12,23 @@ from app.services import list_active_channels
 from app.models import User
 from app.config import settings
 from app.keyboards import subscription_kb, SUPPORT_USERNAME
+
+log = logging.getLogger("bot.mw")
+
+_rate: dict[int, list[float]] = defaultdict(list)
+RATE_LIMIT = 10
+RATE_WINDOW = 3.0
+
+
+def _rate_ok(uid: int) -> bool:
+    now = time.monotonic()
+    bucket = [t for t in _rate[uid] if now - t < RATE_WINDOW]
+    if len(bucket) >= RATE_LIMIT:
+        _rate[uid] = bucket
+        return False
+    bucket.append(now)
+    _rate[uid] = bucket
+    return True
 
 
 async def check_subscriptions(bot: Bot, user_id: int) -> list:
@@ -57,22 +78,38 @@ class SubscriptionMiddleware(BaseMiddleware):
         if user.id in settings.admin_ids:
             return await handler(event, data)
 
+        if not _rate_ok(user.id):
+            if isinstance(event, Message):
+                try:
+                    await event.answer("⏳ Слишком быстро. Подождите секунду.")
+                except Exception:
+                    pass
+            elif isinstance(event, CallbackQuery):
+                try:
+                    await event.answer("⏳ Подождите…", show_alert=False)
+                except Exception:
+                    pass
+            return None
+
         banned, reason = await is_user_banned(user.id)
         if banned:
             text = (
                 "🚫 Вы заблокированы в боте.\n\n"
                 f"Причина: {reason or 'не указана'}\n\n"
-                f"Для обжалования пишите в поддержку: @{SUPPORT_USERNAME}"
+                f"Обжалование: @{SUPPORT_USERNAME}"
             )
             if isinstance(event, CallbackQuery):
-                await event.answer("Вы заблокированы", show_alert=True)
                 try:
+                    await event.answer("Вы заблокированы", show_alert=True)
                     await event.message.answer(text)
                 except Exception:
                     pass
                 return None
             if isinstance(event, Message):
-                await event.answer(text)
+                try:
+                    await event.answer(text)
+                except Exception:
+                    pass
                 return None
             return None
 
@@ -88,11 +125,14 @@ class SubscriptionMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             try:
                 await event.message.answer(sub_text, reply_markup=subscription_kb(missing))
+                await event.answer("Нужна подписка на каналы", show_alert=True)
             except Exception:
                 pass
-            await event.answer("Нужна подписка на каналы", show_alert=True)
             return None
         if isinstance(event, Message):
-            await event.answer(sub_text, reply_markup=subscription_kb(missing))
+            try:
+                await event.answer(sub_text, reply_markup=subscription_kb(missing))
+            except Exception:
+                pass
             return None
         return None
