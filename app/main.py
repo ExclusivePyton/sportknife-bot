@@ -17,6 +17,7 @@ from app.handlers.stats import router as stats_router
 from app.handlers.withdrawals import router as withdrawals_router
 from app.handlers.promo import router as promo_router
 from app.handlers.admin import router as admin_router
+from app.handlers.player_tours import router as player_tours_router
 
 
 async def main():
@@ -43,6 +44,7 @@ async def main():
     dp.include_router(common_router)
     dp.include_router(profile_router)
     dp.include_router(tournaments_router)
+    dp.include_router(player_tours_router)
     dp.include_router(gold_router)
     dp.include_router(stats_router)
     dp.include_router(withdrawals_router)

@@ -150,15 +150,25 @@ def _header(t, regs) -> str:
     n_t = sum(1 for r in regs if r.side == "T")
     n_ct = sum(1 for r in regs if r.side == "CT")
     cost = "Бесплатно" if t.registration_cost == 0 else f"{t.registration_cost} Gold"
+    extra = ""
+    if getattr(t, "is_player_created", False):
+        mode = "🪙 На Gold (гарант)" if t.gold_enabled else "🆓 Турнир игрока"
+        st = getattr(t, "guarantor_status", None) or "none"
+        if st == "awaiting_gold":
+            extra = f"\n👑 {mode}\n⏳ Запись после подтверждения фонда гарантом"
+        elif st == "awaiting_result":
+            extra = f"\n👑 {mode}\n📸 Результат на проверке у гаранта"
+        else:
+            extra = f"\n👑 {mode}"
     return (
         f"🏆 <b>{escape(t.title)}</b>\n\n{escape(t.description)}\n\n"
-        f"📅 Старт: когда наберётся полный состав\n"
+        f"📅 Старт: по команде лидера / когда состав готов\n"
         f"🎮 Формат: {escape(t.format)}\n"
         f"👥 Слоты: <b>{len(regs)}/{t.max_participants}</b> "
         f"(🟠 Т {n_t}/{t_cap} · 🔵 КТ {n_ct}/{ct_cap})\n"
-        f"🪙 Стоимость регистрации: {cost}\n🏅 Призы: {escape(t.prize_fund)}\n"
+        f"🪙 Регистрация: {cost}\n🏅 Призы: {escape(t.prize_fund)}\n"
         f"📜 Условия: {escape(t.conditions)}\n"
-        f"ℹ️ {escape(t.additional_info or '—')}"
+        f"ℹ️ {escape(t.additional_info or '—')}{extra}"
     )
 
 
@@ -175,14 +185,20 @@ async def render_tour(tid, uid):
     if len(text) > 4000:
         text = text[:3990] + "…"
     is_open = t.status == TournamentStatus.open
+    is_leader = bool(getattr(t, "is_player_created", False) and t.creator_id == uid)
+    # на gold до подтверждения запись закрыта
+    can_reg = is_open and t.registration_open and len(regs) < t.max_participants
+    if getattr(t, "guarantor_status", None) == "awaiting_gold":
+        can_reg = False
     kb = tournament_detail(
         tid,
         registered=bool(mine),
-        can_leave=bool(mine) and is_open,
-        can_register=is_open and t.registration_open and len(regs) < t.max_participants,
-        can_switch=bool(mine) and is_open,
+        can_leave=bool(mine) and is_open and t.status == TournamentStatus.open,
+        can_register=can_reg,
+        can_switch=bool(mine) and is_open and t.status == TournamentStatus.open,
         has_shot=t.status == TournamentStatus.finished and bool(t.result_screenshot),
         back="tours_done" if t.status == TournamentStatus.finished else "tours",
+        is_leader=is_leader,
     )
     return text, kb, None
 

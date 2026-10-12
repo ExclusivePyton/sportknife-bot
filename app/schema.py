@@ -14,6 +14,11 @@ async def ensure_schema() -> None:
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS result_screenshot TEXT",
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
         "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS cover_photo TEXT",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS creator_id INTEGER",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS is_player_created BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS gold_enabled BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS guarantor_status VARCHAR(32) DEFAULT 'none'",
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS prize_pool_gold NUMERIC(18,2) DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_id INTEGER",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_rewarded BOOLEAN DEFAULT FALSE",
         """CREATE TABLE IF NOT EXISTS bot_settings (

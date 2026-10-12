@@ -84,6 +84,8 @@ async def create_registration(session, user_id, tournament_id, side):
     tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
     if tour.status != TournamentStatus.open or not tour.registration_open:
         raise ValueError("Регистрация закрыта")
+    if getattr(tour, "guarantor_status", None) == "awaiting_gold":
+        raise ValueError("Турнир ждёт подтверждения Gold гарантом")
     existing = (await session.execute(select(Registration.id).where(Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
     if existing:
         raise ValueError("Вы уже зарегистрированы")

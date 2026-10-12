@@ -371,13 +371,9 @@ async def ct_date(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("fmt:"))
+@router.callback_query(TournamentCreateStates.format, F.data.startswith("fmt:"))
 async def ct_format_cb(call: CallbackQuery, state: FSMContext):
     if not admin_only(call.from_user.id):
-        return
-    current = await state.get_state()
-    if current != TournamentCreateStates.format.state:
-        await call.answer("Сначала начните создание турнира", show_alert=True)
         return
     fmt = call.data.split(":", 1)[1]
     from app.keyboards import slots_for_format

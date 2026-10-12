@@ -95,8 +95,15 @@ class Tournament(Base):
     # итоги: победившая сторона ("T" / "CT" / "manual" / None), скриншот статистики, дата завершения
     winner_side: Mapped[str | None] = mapped_column(String(10))
     result_screenshot: Mapped[str | None] = mapped_column(Text)
-    cover_photo: Mapped[str | None] = mapped_column(Text)  # file_id обложки турнира
+    cover_photo: Mapped[str | None] = mapped_column(Text)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # турниры игроков
+    creator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    is_player_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    gold_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # none | awaiting_gold | gold_confirmed | awaiting_result | done
+    guarantor_status: Mapped[str] = mapped_column(String(32), default="none")
+    prize_pool_gold: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     registrations: Mapped[list["Registration"]] = relationship(
