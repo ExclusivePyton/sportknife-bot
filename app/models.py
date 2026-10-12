@@ -95,6 +95,7 @@ class Tournament(Base):
     # итоги: победившая сторона ("T" / "CT" / "manual" / None), скриншот статистики, дата завершения
     winner_side: Mapped[str | None] = mapped_column(String(10))
     result_screenshot: Mapped[str | None] = mapped_column(Text)
+    cover_photo: Mapped[str | None] = mapped_column(Text)  # file_id обложки турнира
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

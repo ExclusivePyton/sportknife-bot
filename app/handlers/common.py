@@ -27,7 +27,6 @@ def valid_game_id(text: str) -> bool:
 
 
 def parse_ref_payload(text: str | None) -> int | None:
-    """Из /start ref123456 или /start ref_123456 → telegram_id."""
     if not text:
         return None
     parts = text.split(maxsplit=1)
@@ -44,7 +43,6 @@ def parse_ref_payload(text: str | None) -> int | None:
 
 
 async def maybe_pay_referral(bot, session, user) -> None:
-    """Начислить реферальную награду, если условия выполнены (подписка уже проверена)."""
     if not user or not user.referred_by_id or user.referral_rewarded:
         return
     if not user.game_id:
@@ -72,7 +70,6 @@ async def start(message: Message, state: FSMContext):
     async with SessionLocal() as session:
         user = await get_or_create_user(session, message.from_user, referrer_telegram_id=ref_tid)
         await session.commit()
-        # refresh attributes
         reward = await get_referral_reward(session)
 
     if not is_admin(message.from_user.id):
@@ -97,7 +94,6 @@ async def start(message: Message, state: FSMContext):
         )
         return
 
-    # подписка + game_id — пробуем закрыть реферала
     async with SessionLocal() as session:
         user = await get_or_create_user(session, message.from_user)
         await maybe_pay_referral(message.bot, session, user)
@@ -139,8 +135,6 @@ async def save_start_game_id(message: Message, state: FSMContext):
             return
         user.game_id = text
         await session.commit()
-
-        # после game_id — если уже подписан, начислить реф
         missing = []
         if not is_admin(message.from_user.id):
             missing = await check_subscriptions(message.bot, message.from_user.id)
@@ -170,7 +164,6 @@ async def check_sub_cb(call: CallbackQuery, state: FSMContext):
     async with SessionLocal() as session:
         user = await get_or_create_user(session, call.from_user)
         await session.commit()
-
         if user.game_id:
             await maybe_pay_referral(call.bot, session, user)
 

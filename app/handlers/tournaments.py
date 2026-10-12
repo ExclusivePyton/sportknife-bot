@@ -36,6 +36,17 @@ def _nick(r: Registration) -> str:
     return escape(r.nickname or "—")
 
 
+def _player_line(r: Registration, user: User | None = None, crown: str = "") -> str:
+    """Строка участника: ник, Game ID, @telegram."""
+    nick = escape(r.nickname or (user.nickname if user and user.nickname else None) or "—")
+    gid = escape(r.game_id or (user.game_id if user else None) or "—")
+    uname = None
+    if user and user.username:
+        uname = user.username
+    tg = f"@{escape(uname)}" if uname else "—"
+    return f"   {nick} · 🎮 <code>{gid}</code> · {tg}{crown}"
+
+
 async def render_list():
     """Текст и клавиатура списка актуальных турниров (с живыми счётчиками)."""
     async with SessionLocal() as s:
@@ -59,39 +70,52 @@ async def render_list():
 
 async def _load(tid, uid):
     async with SessionLocal() as s:
-        t = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one_or_none()
-        if not t:
+        tour = (await s.execute(select(Tournament).where(Tournament.id == tid))).scalar_one_or_none()
+        if not tour:
             return None
-        regs = (
+        rows = (
             await s.execute(
-                select(Registration).where(Registration.tournament_id == tid).order_by(Registration.created_at, Registration.id)
+                select(Registration, User)
+                .join(User, User.id == Registration.user_id)
+                .where(Registration.tournament_id == tid)
+                .order_by(Registration.created_at, Registration.id)
             )
-        ).scalars().all()
+        ).all()
+        regs = [r for r, _u in rows]
+        users_by_id = {u.id: u for r, u in rows}
     mine = next((r for r in regs if r.user_id == uid), None)
-    return t, regs, mine
+    return tour, regs, mine, users_by_id
 
 
-def _participants_block(t, regs) -> str:
-    """Список участников по сторонам: ник и Game ID."""
+def _participants_block(t, regs, users_by_id: dict | None = None) -> str:
+    """Список участников: ник, Game ID, @telegram."""
+    users_by_id = users_by_id or {}
     t_cap, ct_cap = side_caps(t)
     finished = t.status == TournamentStatus.finished
-    groups = [("T", t_cap), ("CT", ct_cap)]
     parts = []
-    for side, cap in groups:
+    for side, cap in (("T", t_cap), ("CT", ct_cap)):
         members = [r for r in regs if r.side == side]
         lines = [f"{SIDE_SHORT[side]} ({len(members)}/{cap}):"]
         if not members:
             lines.append("   —")
         for i, r in enumerate(members, 1):
             crown = " 🏆" if finished and r.is_winner else ""
-            lines.append(f"   {i}. {_nick(r)} — <code>{escape(r.game_id)}</code>{crown}")
+            u = users_by_id.get(r.user_id)
+            nick = escape(r.nickname or (u.nickname if u and u.nickname else None) or "—")
+            gid = escape(r.game_id or (u.game_id if u else None) or "—")
+            tg = f"@{escape(u.username)}" if u and u.username else "без @"
+            lines.append(f"   {i}. {nick} · 🎮 <code>{gid}</code> · {tg}{crown}")
         parts.append("\n".join(lines))
     no_side = [r for r in regs if r.side not in ("T", "CT")]
     if no_side:
         lines = [f"Без стороны ({len(no_side)}):"]
         for i, r in enumerate(no_side, 1):
             crown = " 🏆" if finished and r.is_winner else ""
-            lines.append(f"   {i}. {_nick(r)} — <code>{escape(r.game_id)}</code>{crown}")
+            u = users_by_id.get(r.user_id)
+            nick = escape(r.nickname or (u.nickname if u and u.nickname else None) or "—")
+            gid = escape(r.game_id or (u.game_id if u else None) or "—")
+            tg = f"@{escape(u.username)}" if u and u.username else "без @"
+            lines.append(f"   {i}. {nick} · 🎮 <code>{gid}</code> · {tg}{crown}")
         parts.append("\n".join(lines))
     return "👥 <b>Участники</b>\n" + "\n\n".join(parts)
 
@@ -142,12 +166,12 @@ async def render_tour(tid, uid):
     """(text, keyboard) карточки турнира для конкретного игрока."""
     loaded = await _load(tid, uid)
     if not loaded:
-        return "Турнир не найден.", main_back()
-    t, regs, mine = loaded
+        return "Турнир не найден.", main_back(), None
+    t, regs, mine, users_by_id = loaded
     text = _header(t, regs) + "\n\n" + _status_block(t, mine, regs)
     if mine and mine.side in ("T", "CT") and t.status in (TournamentStatus.open, TournamentStatus.running):
         text += f"\nВы играете за: <b>{SIDE_SHORT[mine.side]}</b>"
-    text += "\n\n" + _participants_block(t, regs)
+    text += "\n\n" + _participants_block(t, regs, users_by_id)
     if len(text) > 4000:
         text = text[:3990] + "…"
     is_open = t.status == TournamentStatus.open
@@ -160,22 +184,22 @@ async def render_tour(tid, uid):
         has_shot=t.status == TournamentStatus.finished and bool(t.result_screenshot),
         back="tours_done" if t.status == TournamentStatus.finished else "tours",
     )
-    return text, kb
+    return text, kb, None
 
 
 async def render_pick(tid, uid, mode):
     """Экран выбора стороны (mode: 'reg' — регистрация, 'sw' — смена стороны)."""
     loaded = await _load(tid, uid)
     if not loaded:
-        return "Турнир не найден.", main_back()
-    t, regs, mine = loaded
+        return "Турнир не найден.", main_back(), None
+    t, regs, mine, _users = loaded
     if t.status != TournamentStatus.open or (mode == "reg" and (mine or not t.registration_open)) or (mode == "sw" and not mine):
         return await render_tour(tid, uid)  # выбирать уже нечего — показываем карточку
     t_cap, ct_cap = side_caps(t)
     by_side = {"T": sum(1 for r in regs if r.side == "T"), "CT": sum(1 for r in regs if r.side == "CT")}
     title = "Выберите, за какую сторону хотите играть:" if mode == "reg" else "Выберите новую сторону:"
     text = f"🏆 <b>{escape(t.title)}</b> · {escape(t.format)}\n\n{title}\n🟠 Т — {by_side['T']}/{t_cap}\n🔵 КТ — {by_side['CT']}/{ct_cap}"
-    return text, side_pick_kb(tid, mode, by_side, t_cap, ct_cap)
+    return text, side_pick_kb(tid, mode, by_side, t_cap, ct_cap), None
 
 
 def main_back():
@@ -183,13 +207,22 @@ def main_back():
     return back_kb()
 
 
-async def _show(call: CallbackQuery, text, kb, kind, tid=None, uid=None):
-    """Отредактировать сообщение и запомнить его для живых обновлений."""
+async def _show(call: CallbackQuery, text, kb, kind, tid=None, uid=None, photo=None):
+    """Отредактировать сообщение и запомнить для живых обновлений."""
     try:
-        await call.message.edit_text(text, reply_markup=kb)
+        if call.message.photo:
+            await call.message.edit_caption(caption=text, reply_markup=kb)
+        else:
+            await call.message.edit_text(text, reply_markup=kb)
     except TelegramBadRequest as e:
         if "not modified" not in str(e).lower():
-            raise
+            try:
+                await call.message.delete()
+            except Exception:
+                pass
+            sent = await call.bot.send_message(call.message.chat.id, text, reply_markup=kb)
+            live.track(sent.chat.id, sent.message_id, kind, tid, uid)
+            return
     live.track(call.message.chat.id, call.message.message_id, kind, tid, uid)
 
 
@@ -228,8 +261,8 @@ async def tour_detail_cb(call: CallbackQuery):
     async with SessionLocal() as s:
         u = await get_or_create_user(s, call.from_user)
         await s.commit()
-    text, kb = await render_tour(tid, u.id)
-    await _show(call, text, kb, "detail", tid, u.id)
+    text, kb, photo = await render_tour(tid, u.id)
+    await _show(call, text, kb, "detail", tid, u.id, photo=photo)
     await call.answer()
 
 
@@ -248,7 +281,7 @@ async def register_pick_cb(call: CallbackQuery):
     if not u.game_id:
         await call.answer("Сначала укажите Game ID через /start", show_alert=True)
         return
-    text, kb = await render_pick(tid, u.id, "reg")
+    text, kb, photo = await render_pick(tid, u.id, "reg")
     await _show(call, text, kb, "pick_reg", tid, u.id)
     await call.answer()
 
@@ -272,19 +305,25 @@ async def register_cb(call: CallbackQuery):
             await s.rollback()
             await call.answer(str(e), show_alert=True)
             # показать актуальное состояние (например, сторона уже занята)
-            text, kb = await render_pick(tid, u.id, "reg")
+            text, kb, photo = await render_pick(tid, u.id, "reg")
             try:
                 await _show(call, text, kb, "pick_reg", tid, u.id)
             except Exception:
                 pass
             return
         uid = u.id
-    msg = f"Регистрация успешна! Вы за {SIDE_SHORT[side]}."
+    tg_label = f"@{u.username}" if u.username else "без @"
+    msg = (
+        f"Регистрация успешна! Вы за {SIDE_SHORT[side]}.\n"
+        f"🏷 Ник: {u.nickname or u.username or '—'}\n"
+        f"🎮 Game ID: {u.game_id or '—'}\n"
+        f"📱 Telegram: {tg_label}"
+    )
     if filled:
         msg += " Состав набран — регистрация закрыта."
     await call.answer(msg, show_alert=True)
-    text, kb = await render_tour(tid, uid)
-    await _show(call, text, kb, "detail", tid, uid)
+    text, kb, photo = await render_tour(tid, uid)
+    await _show(call, text, kb, "detail", tid, uid, photo=photo)
     live.schedule_refresh(call.bot, tid)
     if filled:
         async with SessionLocal() as s:
@@ -309,7 +348,7 @@ async def switch_pick_cb(call: CallbackQuery):
     async with SessionLocal() as s:
         u = await get_or_create_user(s, call.from_user)
         await s.commit()
-    text, kb = await render_pick(tid, u.id, "sw")
+    text, kb, photo = await render_pick(tid, u.id, "sw")
     await _show(call, text, kb, "pick_sw", tid, u.id)
     await call.answer()
 
@@ -326,16 +365,16 @@ async def switch_cb(call: CallbackQuery):
         except Exception as e:
             await s.rollback()
             await call.answer(str(e), show_alert=True)
-            text, kb = await render_tour(tid, u.id)
+            text, kb, photo = await render_tour(tid, u.id)
             try:
-                await _show(call, text, kb, "detail", tid, u.id)
+                await _show(call, text, kb, "detail", tid, u.id, photo=photo)
             except Exception:
                 pass
             return
         uid = u.id
     await call.answer(f"Теперь вы за {SIDE_SHORT[side]}")
-    text, kb = await render_tour(tid, uid)
-    await _show(call, text, kb, "detail", tid, uid)
+    text, kb, photo = await render_tour(tid, uid)
+    await _show(call, text, kb, "detail", tid, uid, photo=photo)
     live.schedule_refresh(call.bot, tid)
 
 
@@ -363,8 +402,8 @@ async def unregister_cb(call: CallbackQuery):
     if reopened:
         msg += " Регистрация снова открыта."
     await call.answer(msg, show_alert=True)
-    text, kb = await render_tour(tid, uid)
-    await _show(call, text, kb, "detail", tid, uid)
+    text, kb, photo = await render_tour(tid, uid)
+    await _show(call, text, kb, "detail", tid, uid, photo=photo)
     live.schedule_refresh(call.bot, tid)
 
 
