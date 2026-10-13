@@ -84,8 +84,6 @@ async def create_registration(session, user_id, tournament_id, side):
     tour = (await session.execute(select(Tournament).where(Tournament.id == tournament_id).with_for_update())).scalar_one()
     if tour.status != TournamentStatus.open or not tour.registration_open:
         raise ValueError("Регистрация закрыта")
-    if getattr(tour, "guarantor_status", None) == "awaiting_gold":
-        raise ValueError("Турнир ждёт подтверждения Gold гарантом")
     existing = (await session.execute(select(Registration.id).where(Registration.user_id == user_id, Registration.tournament_id == tournament_id))).scalar_one_or_none()
     if existing:
         raise ValueError("Вы уже зарегистрированы")
@@ -99,6 +97,20 @@ async def create_registration(session, user_id, tournament_id, side):
         raise ValueError(f"За {SIDE_SHORT[side]} все места заняты ({cap}/{cap}). Выберите другую сторону.")
     if not user.game_id:
         raise ValueError("Сначала укажите Game ID через /start")
+    # антиабуз: не больше N активных турниров одновременно
+    MAX_ACTIVE = 5
+    active_regs = (
+        await session.execute(
+            select(func.count(Registration.id))
+            .join(Tournament, Tournament.id == Registration.tournament_id)
+            .where(
+                Registration.user_id == user_id,
+                Tournament.status.in_([TournamentStatus.open, TournamentStatus.running]),
+            )
+        )
+    ).scalar_one()
+    if active_regs >= MAX_ACTIVE:
+        raise ValueError(f"Нельзя быть сразу в {MAX_ACTIVE}+ активных турнирах. Выйдите из лишних.")
     cost = Decimal(tour.registration_cost)
     if cost > 0:
         if available_balance(user) < cost:
@@ -623,3 +635,41 @@ async def try_complete_referral(session, user_id: int) -> tuple[bool, Decimal, i
             reference_id=str(user.id),
         )
     return True, amount, referrer.telegram_id
+
+
+async def cancel_tournament_full(session, tournament_id: int):
+    """Отмена турнира: возврат registration_cost всем, закрытие записи."""
+    tour = (
+        await session.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
+    ).scalar_one()
+    if tour.status in (TournamentStatus.finished, TournamentStatus.cancelled):
+        raise ValueError("Турнир уже завершён или отменён")
+    cost = Decimal(tour.registration_cost)
+    regs = (
+        await session.execute(
+            select(Registration, User)
+            .join(User, User.id == Registration.user_id)
+            .where(Registration.tournament_id == tournament_id)
+        )
+    ).all()
+    notify_ids = []
+    for reg, user in regs:
+        if cost > 0:
+            user.balance += cost
+            session.add(
+                Transaction(
+                    user_id=user.id,
+                    amount=cost,
+                    type=TransactionType.registration_refund,
+                    description=f"Возврат: турнир #{tour.id} отменён",
+                    reference_id=str(tour.id),
+                )
+            )
+        notify_ids.append(user.telegram_id)
+        await session.delete(reg)
+    tour.status = TournamentStatus.cancelled
+    tour.registration_open = False
+    await session.flush()
+    return tour, notify_ids, cost

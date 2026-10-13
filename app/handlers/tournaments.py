@@ -150,25 +150,15 @@ def _header(t, regs) -> str:
     n_t = sum(1 for r in regs if r.side == "T")
     n_ct = sum(1 for r in regs if r.side == "CT")
     cost = "Бесплатно" if t.registration_cost == 0 else f"{t.registration_cost} Gold"
-    extra = ""
-    if getattr(t, "is_player_created", False):
-        mode = "🪙 На Gold (гарант)" if t.gold_enabled else "🆓 Турнир игрока"
-        st = getattr(t, "guarantor_status", None) or "none"
-        if st == "awaiting_gold":
-            extra = f"\n👑 {mode}\n⏳ Запись после подтверждения фонда гарантом"
-        elif st == "awaiting_result":
-            extra = f"\n👑 {mode}\n📸 Результат на проверке у гаранта"
-        else:
-            extra = f"\n👑 {mode}"
     return (
         f"🏆 <b>{escape(t.title)}</b>\n\n{escape(t.description)}\n\n"
-        f"📅 Старт: по команде лидера / когда состав готов\n"
+        f"📅 Старт: когда наберётся полный состав\n"
         f"🎮 Формат: {escape(t.format)}\n"
         f"👥 Слоты: <b>{len(regs)}/{t.max_participants}</b> "
         f"(🟠 Т {n_t}/{t_cap} · 🔵 КТ {n_ct}/{ct_cap})\n"
         f"🪙 Регистрация: {cost}\n🏅 Призы: {escape(t.prize_fund)}\n"
         f"📜 Условия: {escape(t.conditions)}\n"
-        f"ℹ️ {escape(t.additional_info or '—')}{extra}"
+        f"ℹ️ {escape(t.additional_info or '—')}"
     )
 
 
@@ -185,20 +175,14 @@ async def render_tour(tid, uid):
     if len(text) > 4000:
         text = text[:3990] + "…"
     is_open = t.status == TournamentStatus.open
-    is_leader = bool(getattr(t, "is_player_created", False) and t.creator_id == uid)
-    # на gold до подтверждения запись закрыта
-    can_reg = is_open and t.registration_open and len(regs) < t.max_participants
-    if getattr(t, "guarantor_status", None) == "awaiting_gold":
-        can_reg = False
     kb = tournament_detail(
         tid,
         registered=bool(mine),
         can_leave=bool(mine) and is_open and t.status == TournamentStatus.open,
-        can_register=can_reg,
+        can_register=is_open and t.registration_open and len(regs) < t.max_participants,
         can_switch=bool(mine) and is_open and t.status == TournamentStatus.open,
         has_shot=t.status == TournamentStatus.finished and bool(t.result_screenshot),
         back="tours_done" if t.status == TournamentStatus.finished else "tours",
-        is_leader=is_leader,
     )
     return text, kb, None
 
@@ -433,3 +417,34 @@ async def shot_cb(call: CallbackQuery):
         return
     await call.message.answer_photo(t.result_screenshot, caption=f"📸 Статистика матча · {escape(t.title)}")
     await call.answer()
+
+
+@router.message(F.text == "📋 Мои турниры")
+async def my_tournaments(message: Message):
+    async with SessionLocal() as s:
+        u = await get_or_create_user(s, message.from_user)
+        rows = (
+            await s.execute(
+                select(Tournament, Registration)
+                .join(Registration, Registration.tournament_id == Tournament.id)
+                .where(Registration.user_id == u.id)
+                .order_by(Tournament.id.desc())
+                .limit(20)
+            )
+        ).all()
+        await s.commit()
+    if not rows:
+        await message.answer(
+            "📋 Вы пока не записаны ни в один турнир.\n"
+            "Откройте «🏆 Турниры» и зарегистрируйтесь."
+        )
+        return
+    lines = ["📋 <b>Мои турниры</b>\n"]
+    for t, reg in rows:
+        st = STATUS_TEXT.get(t.status, t.status.value)
+        side = SIDE_SHORT.get(reg.side, "—") if reg.side else "—"
+        lines.append(
+            f"#{t.id} <b>{escape(t.title)}</b> · {escape(t.format)}\n"
+            f"   статус: {st} · сторона: {side}"
+        )
+    await message.answer("\n".join(lines))

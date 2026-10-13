@@ -13,7 +13,7 @@ from app.services import (
     create_promo, list_promos, deactivate_promo,
     list_all_channels, add_required_channel, deactivate_channel,
     list_all_telegram_ids, ban_user, unban_user, list_tournament_participant_ids,
-    kick_player, finish_tournament, side_caps, SIDE_SHORT,
+    kick_player, finish_tournament, side_caps, SIDE_SHORT, cancel_tournament_full,
     get_referral_reward, set_referral_reward,
 )
 from app.keyboards import (
@@ -890,7 +890,37 @@ async def fin_do(call: CallbackQuery, state: FSMContext):
         await asyncio.sleep(0.05)
 
 @router.callback_query(lambda c: c.data.startswith("adm_tour_cancel:"))
-async def tour_cancel(call: CallbackQuery): await change_status(call, TournamentStatus.cancelled)
+async def tour_cancel(call: CallbackQuery):
+    if not admin_only(call.from_user.id):
+        return
+    tid = int(call.data.split(":")[1])
+    async with SessionLocal() as s:
+        try:
+            tour, notify_ids, cost = await cancel_tournament_full(s, tid)
+            await s.commit()
+            title = tour.title
+        except Exception as e:
+            await s.rollback()
+            await call.answer(str(e), show_alert=True)
+            return
+    await call.answer("Турнир отменён", show_alert=True)
+    await call.message.answer(
+        f"❌ Турнир #{tid} <b>{escape(title)}</b> отменён.\n"
+        f"Участникам отправлены уведомления"
+        + (f", возврат по {cost} Gold." if cost else ".")
+    )
+    note = (
+        f"❌ Турнир <b>{escape(title)}</b> отменён администратором."
+        + (f"\n🪙 Возврат: {cost} Gold." if cost else "")
+    )
+    import asyncio
+    for tg_id in notify_ids:
+        try:
+            await call.bot.send_message(tg_id, note)
+        except Exception:
+            pass
+        await asyncio.sleep(0.03)
+    live.schedule_refresh(call.bot, tid)
 
 async def _send_admin_participants(call: CallbackQuery, tid: int):
     t, rows = await _fin_load(tid)

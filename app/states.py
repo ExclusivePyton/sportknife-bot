@@ -83,15 +83,3 @@ class AdminFinishStates(StatesGroup):
 class AdminReferralStates(StatesGroup):
     amount = State()
 
-
-class PlayerCreateTourStates(StatesGroup):
-    title = State()
-    format = State()
-    mode = State()          # free / gold
-    prize = State()         # only gold
-    description = State()
-    confirm = State()
-
-
-class PlayerResultStates(StatesGroup):
-    shot = State()

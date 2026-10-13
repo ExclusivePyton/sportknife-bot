@@ -5,7 +5,7 @@ SUPPORT_USERNAME = "zzxdmq"
 
 def main_menu(is_admin=False):
     rows = [
-        [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="➕ Создать турнир")],
+        [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="📋 Мои турниры")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="📜 История"), KeyboardButton(text="💸 Вывод")],
         [KeyboardButton(text="🎁 Промокод"), KeyboardButton(text="👥 Рефералы")],
@@ -62,10 +62,8 @@ def finished_list(items):
 
 
 def tournament_detail(tid, registered=False, can_leave=False, can_register=False,
-                      can_switch=False, has_shot=False, back="tours", is_leader=False):
+                      can_switch=False, has_shot=False, back="tours"):
     rows = []
-    if is_leader:
-        rows.append([InlineKeyboardButton(text="👑 Панель лидера", callback_data=f"pt_lead:{tid}")])
     if can_register and not registered:
         rows.append([InlineKeyboardButton(text="✅ Зарегистрироваться", callback_data=f"rp:{tid}")])
     if registered and can_switch:
@@ -341,43 +339,7 @@ def kick_confirm_kb(tid, uid, paid: bool):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def player_mode_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🆓 Просто так (бесплатно)", callback_data="pt_mode:free")],
-        [InlineKeyboardButton(text="🪙 На Gold (через гаранта)", callback_data="pt_mode:gold")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="pt_cancel")],
-    ])
 
 
-def player_confirm_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Создать", callback_data="pt_confirm")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="pt_cancel")],
-    ])
 
 
-def leader_actions_kb(tid, can_start: bool, can_submit: bool, gold_waiting: bool):
-    rows = []
-    if gold_waiting:
-        rows.append([InlineKeyboardButton(text="💬 Написать гаранту", url=f"https://t.me/{SUPPORT_USERNAME}")])
-    if can_start:
-        rows.append([InlineKeyboardButton(text="▶️ Начать турнир", callback_data=f"pt_start:{tid}")])
-    if can_submit:
-        rows.append([InlineKeyboardButton(text="📸 Сдать результат", callback_data=f"pt_result:{tid}")])
-    rows.append([InlineKeyboardButton(text="⬅️ К турниру", callback_data=f"tour:{tid}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def admin_guarantor_kb(tid):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Gold получен", callback_data=f"adm_gold_ok:{tid}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_gold_no:{tid}")],
-        [InlineKeyboardButton(text="📋 К турниру", callback_data=f"adm_pick:{tid}")],
-    ])
-
-
-def admin_player_result_kb(tid):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏁 Завершить (результаты)", callback_data=f"adm_tour_finish:{tid}")],
-        [InlineKeyboardButton(text="📋 К турниру", callback_data=f"adm_pick:{tid}")],
-    ])
